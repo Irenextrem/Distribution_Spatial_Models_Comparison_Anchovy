@@ -34,6 +34,7 @@ library(maptools) #Cargar mapas
 library(dismo) #Para poder trabajar con bioclim
 library(sdmpredictors) #Para descargarme las variables ambientales
 library(PresenceAbsence)
+library(rJava)
 ```
 
 ```{r}
@@ -192,7 +193,7 @@ fddmx <- function(coordenadas, predictores,background){
 
 
 ```{r}
-# Necesito este objeto con el que he creado la base de datos sdmdata. La semilla es la misma
+# Necesito este objeto con el que he creado la base de datos sdmdata.Son coordenadas aleatorias en las cuales puede o no haber presencia de la especie. La semilla es la misma.
 set.seed(141592) 
 backgr <- randomPoints(predictors2, 1000) 
 
@@ -230,6 +231,75 @@ saveRDS(predict.presence.bc.bioclim, "BIOCLIM/Predicciones_BIOCLIM.ascii")
 
 En el mapa predictivo se puede ver que  en el Mar del Norte y en la parte de costa Oeste de Gran Bretaña y Francia hay una probabilidad de presencia de hasta el 0.8. Este valor va disminuyendo progresivamente a medida que se aleja de la zona.
 Por otro lado, en la costa de España, Norte de Italia, sobre todo en la noreste, y costa africana cercana a la península ibérica la probabilidad de presencia es de 0.4-0.2.
+
+# MAXENT
+
+```{r}
+# Construyo el modelo
+maxent_model <- maxent(predictors2, data,backgr)
+
+plot(maxent_model@presence)
+plot(maxent_model)
+```
+Lo que entiendo aquí es que se está midiendo el porcentaje de cada variable en cuando a cómo es de importante a la hora de ajustar el modelo. Según muestra la gráfica las variables mas importantes son la batimetría y la temperatura media.
+
+```{r}
+
+fddmx2 <- function(coordenadas, predictores,background){
+
+      group <- kfold(coordenadas, 5)
+
+      pres_train <- coordenadas[group != 1, ] #Las que no sean 1
+      pres_test <- coordenadas[group == 1, ] #Las que sean 1
+      
+      me_m<- maxent(predictors2, pres_train,background)
+
+      group <- kfold(background, 5) #Hago 5 grupos de esos puntos
+      backg_train <- background[group != 1, ]
+      backg_test <- background[group == 1, ]
+      
+      eval.modesta <- evaluate(pres_test, backg_test, me_m, predictores)
+      
+      auc_bc.model <- eval.modesta@auc #auc
+      
+      cor_bc.model <- eval.modesta@cor #cor
+      
+      kappa_bc.model <- mean(eval.modesta@kappa) #Kappa
+
+      sensibility_bc.model <- mean(eval.modesta@TPR/(eval.modesta@TPR+eval.modesta@FNR)) #Sensibilidad
+      
+      specificity_bc.modelo <- mean(eval.modesta@TNR/(eval.modesta@FPR+eval.modesta@TNR)) #Especificidad
+      
+      TSSbc.model <- mean(eval.modesta@TPR+eval.modesta@TNR-1) #TSS
+      
+      return(c(auc_bc.model,cor_bc.model,kappa_bc.model,sensibility_bc.model,specificity_bc.modelo,TSSbc.model))
+}
+
+# Hago una matriz para guardar los valores de los coeficientes de las diez iteraciones que me devuelva la función 
+cosites_maxent_model <- matrix(ncol=6,nrow=10) 
+      
+# Genereo un bucle for de 10 iteraciones que me devuelva 10 valores diferentes de los 6 coeficientes.
+for (i in 1:10) { cosites_maxent_model[i,] <- fddmx2(data,predictors2,backgr)}
+
+# Le doy nombre a las columnas para saber qué coeficientes hay dentro
+colnames(cosites_maxent_model) <- c('AUC','COR','Kappa','Sensitivity','Specificity','TSS')
+
+# Hago la media por columnas que es lo que me interesa y lo guardo
+coef_bc.model <- apply(cosites_maxent_model, 2, mean)
+# write.csv(coef_bc.model,'MAXENT/coeficientes_MAXENT.csv')
+```
+
+```{r}
+# Predicciones de presencia
+predict.presence.maxent_model <- dismo::predict(object = maxent_model, 
+                                   x = predictors2, 
+                                   ext = ext)
+
+plot(predict.presence.maxent_model)
+
+# Me guardo el modelo predictivo
+# saveRDS(predict.presence.maxent_model, "MAXENT/Predicciones_MAXENT.ascii")
+```
 
 
 
