@@ -1,0 +1,229 @@
+---
+title: "GLM Frecuentista"
+author: "Irene Extremera Serrano"
+date: "14/1/2021"
+output: html_document
+---
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(eval = TRUE, warning = FALSE, error = FALSE, message = FALSE, comment = " ")
+```
+
+````{r, warning=FALSE, message=FALSE, include=FALSE }
+library(sp) #Tabajar con objetos de tipo espacial
+library(rgdal) #Para que funcione sdmpredictors
+library(carData)
+library(car)
+library(nlme)
+library(gstat)
+library(sf)
+library(spData)
+library(spdep)
+library(lattice)
+library(survival)
+library(Formula)
+library(ggplot2)
+library(Hmisc)
+library(raster) #Para poder trabajar con objetos tipo raster
+library(leaflet)
+library(GGally)
+library(maptools)
+library(corrplot)
+library(rgeos)
+library(maptools) #Cargar mapas
+library(dismo) #Para poder trabajar con bioclim
+library(sdmpredictors) #Para descargarme las variables ambientales
+library(PresenceAbsence)
+library(rJava)
+library(randomForest)
+library(INLA) #Para trabajar con INLA
+library(Matrix)
+library(parallel)
+library(foreach)
+library(dotCall64)
+library(grid)
+library(spam)
+library(fields)
+```
+
+```{r}
+# Descargo el mapa del mundo
+data(wrld_simpl) #Cargo el mapa del mundo
+
+# Datos
+data <- read.csv('C:/Users/Irene/Source/Repositorios/TFM-Irene-Extremera/Datos/Anchoas_Aqua.csv',TRUE,",")
+data<- data[-1]
+
+# Predictores
+files<-(list.files("C:/Users/Irene/Source/Repositorios/TFM-Irene-Extremera/Predictores", full.names=T, pattern=".tif"))
+predictors <- stack(files)
+names(predictors) <- c("bathy","chlomean","ppmean","odismean","salinity","tempmean")
+
+# Escalo los valores para que al hacer el análisis todas las variables tengan la misma escala 
+predictors2 <- scale(predictors) #Ya he comprobado que tienen su media en cero en otro script
+
+# Pseudoausencias
+# Pongo una semilla para que me aparezcan los puntos en el mismo sitio
+# Genero 1000 pseudoausencias en la zona que me interesa
+set.seed(141592) 
+backgr <- randomPoints(predictors2, 1000) 
+
+# Lo transformo en data.frame para poder trabajar con él
+backgr <-as.data.frame(backgr) #Incluyo esta linea de código pero estos valores están dentro de sdmdata
+
+# Escalo los valores para que al hacer el análisis todas las variables tengan la misma escala 
+predictors2 <- scale(predictors)
+round(apply(values(predictors2), 2, summary), 4)
+
+# Cargo la base de datos
+sdmdata <- read.csv("C:/Users/Irene/Source/Repositorios/TFM-Irene-Extremera/Datos/sdmdata.csv")
+
+```
+
+
+# GLM
+
+En base a la descriptiva realizada valoro trabajar con varios modelos:
+- Según la correlación voy a usar dos modelos: uno que incluya bathy, tempmean, chlmean y salinity (1)
+  y otro que incluya bathy, ppmean y odismean (2).
+- Según el VIF y teniendo en cuenta que a partir de 5 es alto solo consideraré un modelo que incluya bathy (3).
+
+Antes de ponerme a hacer todos los modelos solo voy a probar el modelo mas sencillo de los tres que sería el que incluye bathy como covariable.
+
+  
+```{r}
+glm1 <- glm(pb ~ bathy, data=sdmdata, family="binomial") 
+# vif(glm1) #Como solo he usado una covariable no me permite usarlo
+summary(glm1) 
+D1_p1<-((glm1$null.deviance-glm1$deviance)/glm1$null.deviance)*100;D1_p1 #El D1 es similar al R^2 
+```
+
+## Valoración del modelo.
+
+```{r}
+# Valoración del modelo:
+# Normalidad y homocedasticidad
+par(mfrow=c(2,2))
+plot(glm1) #No se ve normalidad ni homocedasticidad en los residuos
+res_m1 <- residuals(glm1,type='deviance')
+shapiro.test(res_m1) #No hay normalidad p valor de 2.2e-16
+1-pchisq(glm1$deviance, df = glm1$df.residual, lower.tail = F) #0.2591796 no hay diferencias significativas entre el modelo nulo y el ajustado
+```
+
+## Predicción del modelo
+
+```{r}
+# Es normal que los residuos me salgan así debido a que estoy trabajando con una binomial.
+# A continaución voy a realizar alguna predicción
+predm1<-predict(predictors2,glm1,type='response')
+
+# Lo represento
+par(mfrow=c(1,1))
+plot(predm1)
+plot(wrld_simpl, axes=TRUE,add=T,col="grey") #Mapa de probabilidad de `resencia de mi variable respuesta
+
+#plot points
+points(sdmdata$x,sdmdata$y, col=sdmdata$pb+1,pch=20, cex=0.75) #Ploteo los puntos observados y ausentes
+#dev.off()
+```
+
+### Valoración de la predicción
+
+#### Correlación
+```{r}
+# Voy a evaluar la predicción del modelo:
+coords<-as.data.frame(cbind(sdmdata$x,sdmdata$y)) #Extraigo la lat y long de los puntos obs
+ppm1<-extract(predm1,coords) #Lo mismo con los valores de probabilidad de los puntos observados
+ppm1<-as.data.frame(ppm1) #Paso a data.frame
+sdmdata1<-cbind(sdmdata,ppm1) #Lo junto todo a una base de datos
+sdmdata1<-na.omit(sdmdata1) #Elimino los NAs
+cor(sdmdata1$ppm1,sdmdata1$pb,method="spearman") # 0.558 es la correlación entre lo predicho y lo observado
+```
+
+#### Cross Validation
+
+```{r}
+
+# FUNCIÓN DEFINITIVA DEFINITIVÍSIMA MILENARIA XTREM: Funciona para glm.
+# Esta función sirve para hacer una cross validation y obtener así los distintos criterios de valoración del modelo que me interesan
+
+fddmx <- function(coordenadas, predictores,background,model){
+
+      group <- kfold(coordenadas, 5)
+
+      pres_train <- coordenadas[group != 1, ] #Las que no sean 1
+      pres_test <- coordenadas[group == 1, ] #Las que sean 1
+      
+      # bc <- bioclim(predictores, pres_train)
+      modelo <- update(model, data = pres_train)
+
+      group <- kfold(background, 5) #Hago 5 grupos de esos puntos
+      backg_train <- background[group != 1, ]
+      backg_test <- background[group == 1, ]
+      
+      eval.modesta <- evaluate(pres_test, backg_test,  modelo, predictores)
+      
+      auc_modelo.model <- eval.modesta@auc #auc
+      
+      cor_modelo.model <- eval.modesta@cor #cor
+      
+      kappa_modelo.model <- mean(eval.modesta@kappa) #Kappa
+
+      sensibility_modelo.model <- mean(eval.modesta@TPR/(eval.modesta@TPR+eval.modesta@FNR)) #Sensibilidad
+      
+      specificity_modelo.modelo <- mean(eval.modesta@TNR/(eval.modesta@FPR+eval.modesta@TNR)) #Especificidad
+      
+      TSS_modelo.model <- mean(eval.modesta@TPR+eval.modesta@TNR-1) #TSS
+      
+      return(c(auc_modelo.model,cor_modelo.model,kappa_modelo.model,sensibility_modelo.model,specificity_modelo.modelo,TSS_modelo.model))
+}
+
+# Hago una matriz para guardar los valores de los coeficientes de las diez iteraciones que me devuelva la función 
+cosites_glm <- matrix(ncol=6,nrow=10) 
+
+attach(sdmdata)
+# Genereo un bucle for de 10 iteraciones que me devuelva 10 valores diferentes de los 6 coeficientes.
+for (i in 1:10) { cosites_glm[i,] <- fddmx(data,predictors2,backgr,glm1)}
+
+# Le doy nombre a las columnas para saber qué coeficientes hay dentro
+colnames(cosites_glm) <- c('AUC','COR','Kappa','Sensitivity','Specificity','TSS')
+
+# Hago la media por columnas que es lo que me interesa y lo guardo
+coef_bc.model <- apply(cosites_glm, 2, mean);coef_bc.model
+# write.csv(coef_bc.model,'GLM/coeficientes_GLM.csv')
+```
+
+```{r, include=FALSE}
+#################SPATIAL CORRELATION###########################
+
+nb <- dnearneigh(as.matrix(coords), 1,max(coords));nb #Hago la matriz de vecinos para calcular el índice de Moran
+
+plot(wrld_simpl, xlim=c(-10,38), ylim=c(30,65), axes=TRUE,col="light yellow")
+plot(nb, coords, col='red', lwd=2, add=TRUE)
+listw <- nb2listw(nb,style = "S")
+
+MoranI <- moran.test(residuals(glm1), listw=listw, randomisation=FALSE); MoranI #p valor de 1 indica que Ho no se rechaza, no hay autocorrelación espacial
+Moran_MC <- moran.mc(residuals(glm1), listw=listw, nsim=100); Moran_MC #p valor de 0.99 Ho no se rechaza, lo cual indica que no hay autocorrelación espacial
+```
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
