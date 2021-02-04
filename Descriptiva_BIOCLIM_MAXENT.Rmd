@@ -1,0 +1,495 @@
+---
+title: "Modelos para compilar"
+author: "Irene Extremera Serrano"
+date: "10/12/2020"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(eval = TRUE, warning = FALSE, error = FALSE, message = FALSE, comment = " ")
+```
+
+````{r, warning=FALSE, message=FALSE, echo=FALSE }
+library(sp) #Tabajar con objetos de tipo espacial
+library(rgdal) #Para que funcione sdmpredictors
+library(carData)
+library(car)
+library(nlme)
+library(gstat)
+library(sf)
+library(spData)
+library(spdep)
+library(lattice)
+library(survival)
+library(Formula)
+library(ggplot2)
+library(Hmisc)
+library(raster) #Para poder trabajar con objetos tipo raster
+library(leaflet)
+library(GGally)
+library(maptools)
+library(corrplot)
+library(rgeos)
+library(maptools) #Cargar mapas
+library(dismo) #Para poder trabajar con bioclim
+library(sdmpredictors) #Para descargarme las variables ambientales
+library(PresenceAbsence)
+library(rJava)
+library(randomForest)
+library(INLA) #Para trabajar con INLA
+library(Matrix)
+library(parallel)
+library(foreach)
+library(dotCall64)
+library(grid)
+library(spam)
+library(fields)
+library(RColorBrewer) #Para ponerle colorinchis a los plots
+```
+
+###########################################
+##### --- Cargar la base de datos --- #####
+###########################################
+
+```{r}
+setwd("C:/Users/Irene/Source/Repositorios/TFM-Irene-Extremera/Rmd") #Directorio de trabajo
+data(wrld_simpl) #Cargo el mapa del mundo
+```
+
+Con anterioridad he limpiado la base de datos de ubicaciones que no estuviesen presentes en Atlántico Norte y he guardado el fichero tanto de ubicaciones de Atlántico Norte como de Atlántico Norte y Mediterraneo.
+
+```{r}
+# Datos de Atlántico Norte (Aquamaps)
+data <- read.csv('C:/Users/Irene/Source/Repositorios/TFM-Irene-Extremera/Datos/Anchoas_Aqua_atln.csv',TRUE,",") 
+data<- data[-1] #Elimino la primera columna que es un vector de índices
+
+#Dibujo las ubicaciones para cerciorarme que son las que me interesan
+plot(wrld_simpl, axes=TRUE,col="light yellow",xlim=c(-20,35),ylim=c(43,70))
+points(data$V1, data$V2, col="blue", pch=20, cex=0.75)
+```
+
+```{r}
+# Los rasters han sido recortados con anterioridad usando este extent: Atlántico Norte
+ext <-extent(-20,35,43,70)
+
+# Predictores Atlántico Norte. Todos son de Bio-Oracle menos batimetría que es de Maspec.
+files<-(list.files("C:/Users/Irene/Source/Repositorios/TFM-Irene-Extremera/Predictores/atl", full.names=T, pattern=".tif")) 
+predictors <- stack(files)
+names(predictors) <- c("bathy","chlomean","ppmean","odismean","salinity","tempmean")
+                       
+# Escalo los valores para que al hacer el análisis todas las variables tengan la misma escala 
+predictors2 <- scale(predictors)
+round(apply(values(predictors2), 2, summary), 4) #Lo importante aquí es que tengan la media en 0
+```
+
+```{r}
+# Los pinto sobre todo para comprobar que están bien recortados y contienen información
+plot(predictors)
+```
+
+#############################################################
+##### --- Presencias, Pseudoausencias & Otras cosas --- #####
+#############################################################
+
+```{r}
+# PRESENCIAS
+# Extraigo las coordenadas y les doy nombre
+coords <- cbind(data$V1, data$V2) 
+colnames(coords)<-c("x","y") 
+coords <- as.data.frame(coords)
+
+# La función extract permite extraer los valores de la variable ambiental de las coordenadas donde están las presencias
+presvals <- extract(predictors2, coords) #Hay muchos NAs pero son los puntos de tierra, que no cunda el pánico
+
+# Me cercioro de que todo está correcto
+head(presvals) #Hay muchos NAs pero son los puntos de tierra, que no cunda el pánico
+```
+
+```{r}
+# PSEUDOAUSENCIAS
+# Pongo una semilla para que me aparezcan los puntos en el mismo sitio en caso de replicar el código
+# Genero 1000 pseudoausencias en la zona que me interesa
+set.seed(141592) 
+backgr <- randomPoints(predictors2, 1000) #Estas pseudoausencias es solo para Atlántico Norte
+
+# Lo transformo en data.frame para poder trabajar con él
+backgr <-as.data.frame(backgr) 
+head(backgr)
+```
+
+```{r}
+# Pinto las pseudoausencias con el fin de ver que efectivamente se han creado
+plot(wrld_simpl, xlim= c(-20,35),ylim=c(43,70), axes=TRUE,col="light yellow")
+points(data$V1, data$V2, col="pink", pch=20, cex=0.75)
+points(backgr, col="black", pch=20, cex=0.75)
+```
+
+
+```{r}
+# Extraigo valores de las variables ambientales de las pseudoausencias
+absvals <- extract(predictors2, backgr) 
+
+# Me cercioro de que todo está bien
+head(absvals)
+```
+
+
+```{r}
+#Hago La Base de Datos DEFINITIVA DEFINITIVÍSIMA
+# Genero un único vector de coordenadas
+coords<-as.data.frame(rbind(coords,backgr)) 
+
+# Genero un vector con tantas presencias (1) y ausencias (0) haya
+pb <- c(rep(1, nrow(presvals)), rep(0, nrow(absvals)))
+
+# Junto los datos de las variables ambientales de presencia y pseudoausencia con los 0 y 1.
+sdmdata <- data.frame(cbind(pb, rbind(presvals, absvals), coords)) 
+head(sdmdata)
+```
+
+```{r}
+#Miro si hay NAs y los quito si son pocos, pero si son muchos hago una imputación de la media de los datos que están cercanos.
+summary(sdmdata) #24-45 Nas
+to.remove <- which(!complete.cases(sdmdata))
+sdmdata <- sdmdata[-to.remove,]
+
+# Vuelvo a hacer el summary para cerciorarme de que ya no tengo NAs
+summary(sdmdata) #No queda ningún NAs
+
+# Guardo la base de datos para usarla posteriormente.
+write.csv(sdmdata,"C:/Users/Irene/Source/Repositorios/TFM-Irene-Extremera/Datos/sdmdata_atl.csv")
+
+# Cargo la base de datos
+sdmdata <- read.csv("C:/Users/Irene/Source/Repositorios/TFM-Irene-Extremera/Datos/sdmdata.csv")
+```
+
+###############################
+##### --- Descriptiva --- #####
+###############################
+
+```{r}
+# Miro la correlación entre variables para identificar qué variables o no incluir.
+# La correlación se empieza a plantear el no introducirla partir de 0.7.
+# Hacer modelos con correlación y sin ella para ver cómo ajustan y ver cómo se explica (opcional)
+
+matrix<-rcorr(as.matrix(sdmdata[,c(3:8)]), type = "pearson")
+
+# ... : further arguments to pass to the native R cor.test function
+cor.mtest <- function(mat, ...) {
+  mat <- as.matrix(mat)
+  n <- ncol(mat)
+  p.mat<- matrix(NA, n, n)
+  diag(p.mat) <- 0
+  for (i in 1:(n - 1)) {
+    for (j in (i + 1):n) {
+      tmp <- cor.test(mat[, i], mat[, j], ...)
+      p.mat[i, j] <- p.mat[j, i] <- tmp$p.value
+    }
+  }
+  colnames(p.mat) <- rownames(p.mat) <- colnames(mat)
+  p.mat
+}
+
+corrplot(matrix$r, type="lower", tl.col = "black",method="number",
+         p.mat = matrix$P, sig.level = 0.05)
+```
+
+Se puede observar que las correlaciones entre las distintas variables son bastante altas:
+- Chlomean y odismean con un 0.89, bastante alta y positiva.
+- ppmean tiene una correlación negativa alta con salinidad -0.81 y tempmean -0.88.
+
+A si a primera vista diría que las variables mas indicadas para entrar en el modelo serían: bathy, odismean, salinity y tempmean. 
+
+A continuación realizo un ggpairs para valorar qué tipo de modelos habría que realizar (glm o gam)
+
+```{r, warning=FALSE,message=FALSE}
+# Paso 2
+# Miro la relación entre la variable respuesta y las covariables con el fin de ver si tienen una relación lineal. 
+# Este análisis lo necesitaré posteriormente para considerar o no hacer un gam
+my_fn <- function(data, mapping, ...){
+  p <- ggplot(data = data, mapping = mapping) + 
+    geom_point() + 
+    geom_smooth(method=loess, fill="red", color="red", ...) +
+    geom_smooth(method=lm, fill="blue", color="blue", ...)
+  p
+}
+
+g = ggpairs(sdmdata[,3:8], lower = list(continuous = my_fn))
+g
+```
+
+La variable respuesta es una binomial por lo que lo que vamos a hacer seguro es un GLM. Sin embargo, vamos a considerar también hacer un GAM con el objetivo de ver si mejora la calidad de las predicciones. 
+Como se puede ver en las gráficas de abajo a la izquierda, la relación de unas variables con otras no parece que sea muy lineal. Sin embargo, a continuación se presentarán unas gráficas para comparar las variables dos a dos y cerciorarme que efectivamente se relacionan de forma no lineal.
+
+```{r, echo=FALSE}
+par(mfrow=c(2,2))
+attach(sdmdata)
+G1<-ggplot(sdmdata, aes(bathy,chlomean) ) +
+  geom_point()
+G1
+
+G2<-ggplot(sdmdata, aes(bathy,ppmean) ) +
+  geom_point()
+G2
+
+G3<-ggplot(sdmdata, aes(bathy,salinity) ) +
+  geom_point()
+G3
+
+G4<-ggplot(sdmdata, aes(bathy,odismean) ) +
+  geom_point()
+G4
+
+
+G5<-ggplot(sdmdata, aes(bathy,tempmean) ) +
+  geom_point()
+G5
+
+
+G6<-ggplot(sdmdata, aes(ppmean,chlomean) ) +
+  geom_point()
+G6
+
+G7<-ggplot(sdmdata, aes(ppmean,odismean) ) +
+  geom_point()
+G7
+
+G8<-ggplot(sdmdata, aes(ppmean,tempmean) ) +
+  geom_point()
+G8
+
+G9<-ggplot(sdmdata, aes(ppmean,salinity) ) +
+  geom_point()
+G9
+
+G10<-ggplot(sdmdata, aes(salinity,chlomean) ) +
+  geom_point()
+G10
+
+G11<-ggplot(sdmdata, aes(salinity,tempmean) ) +
+  geom_point()
+G11
+
+G12<-ggplot(sdmdata, aes(salinity,odismean) ) +
+  geom_point()
+G12
+
+G13<-ggplot(sdmdata, aes(odismean,tempmean) ) +
+  geom_point()
+G13
+
+G14<-ggplot(sdmdata, aes(odismean,chlomean) ) +
+  geom_point()
+G14
+
+G15<-ggplot(sdmdata, aes(tempmean,chlomean) ) +
+  geom_point()
+G15
+
+
+```
+
+Las gráficas anteriores son las mismas que las realizadas en el ggpairs solo que aquí se ven mas claramente. Efectivamente se ve que la relación de las covariables entre ellas tienen una forma extraña que se aleja de la normal.
+
+Una vez que ya he visto la correlación entre variables y la forma que tienen de comportarse entre ellas, el siguiente paso será ver con cuáles de estas variables me quedaré para ajustar los modelos. Para ello emplearé miraré el VIF (factor de inflación de la varianza) el cual cuantifica la intensidad de la multicolinealidad en un análisis de regresión normal de mínimos cuadrados. El objetivo sería quedarme con un  conjunto de variables que tengan un valor de VIF menor de 5.
+
+```{r}
+# Compruebo si hay o no multicolinealidad entre variables
+# El objetivo es quedarse con un conjunto de variables con un VIF menor a 5 y 3.
+
+source("HighstatLib.r") #Función ya hecha
+# corvif(sdmdata[,c(3:8)]) #Solo la hago para las que no son covaraibles
+
+corvif(sdmdata[,c(3,6,7,8)]) #He ido quitando una a una las que tenían un GVIF mas alto, ppmean y chlmean
+
+```
+
+Las variables con las que me quedaré finalmente han sido: batimetría, oxígeno disuelto, temperatura media y salinidad. Lo que hice para ir descartando fue: primero introducir todas las variables, ir quitando de una en una las que tenían un mayor valor de VIF y volviendo a realizar la prueba. Finalmente, con este grupo de 4 se ha obtenido VIFs menores de 3.
+
+```{r}
+# Solo uso las covariables seleccionadas
+cuatro_pred <- (list.files("C:/Users/Irene/Source/Repositorios/TFM-Irene-Extremera/Predictores/atl/Seleccionadas", full.names=T, pattern=".tif")) #Cargo bathy que lo he metido en una carpeta aparte
+predictors <- stack(cuatro_pred)
+names(predictors) <- c("bathy","odismean","salinity","tempmean")
+predictors3 <- scale(predictors)
+
+# Elimino esas covariables de la base de datos
+sdmdata <- sdmdata[,c(-1,-4,-5)]
+```
+
+##################################
+##### --- Ajuste modelos --- #####
+##################################
+
+# BIOCLIM
+
+Primero realizo el modelo mas sencillo, BIOCLIM. Para ello utilizo el paquete dismo de Rstudio.
+
+```{r}
+# Hago el modelo de BIOCLIM
+bc.model <- bioclim(x = predictors3, p = data)
+bc.model
+saveRDS(bc.model, "C:/Users/Irene/Source/Repositorios/TFM-Irene-Extremera/BIOCLIM/bc.model.rds") #Guardo el modelo BIOCLIM
+```
+
+
+
+```{r}
+# FUNCIÓN DEFINITIVA DEFINITIVÍSIMA MILENARIA XTREM para BIOCLIM.
+# Esta función sirve para hacer una cross validation y obtener así los distintos índices que me interesan
+
+fddmx <- function(coordenadas, predictores,background){
+
+      group <- kfold(coordenadas, 5)
+
+      pres_train <- coordenadas[group != 1, ] #Las que no sean 1
+      pres_test <- coordenadas[group == 1, ] #Las que sean 1
+      
+      bc <- bioclim(predictores, pres_train)
+
+      group <- kfold(background, 5) #Hago 5 grupos de esos puntos
+      backg_train <- background[group != 1, ]
+      backg_test <- background[group == 1, ]
+      
+      eval.modesta <- evaluate(pres_test, backg_test, bc, predictores)
+      
+      auc_bc.model <- eval.modesta@auc #auc
+      
+      cor_bc.model <- eval.modesta@cor #cor
+      
+      kappa_bc.model <- mean(eval.modesta@kappa) #Kappa
+
+      sensibility_bc.model <- mean(eval.modesta@TPR/(eval.modesta@TPR+eval.modesta@FNR)) #Sensibilidad
+      
+      specificity_bc.modelo <- mean(eval.modesta@TNR/(eval.modesta@FPR+eval.modesta@TNR)) #Especificidad
+      
+      TSSbc.model <- mean(eval.modesta@TPR+eval.modesta@TNR-1) #TSS
+      
+      return(c(auc_bc.model,cor_bc.model,kappa_bc.model,sensibility_bc.model,specificity_bc.modelo,TSSbc.model))
+}
+
+```
+
+
+```{r}
+# Hago una matriz para guardar los valores de los coeficientes de las diez iteraciones que me devuelva la función 
+cosites_bc.model <- matrix(ncol=6,nrow=10) 
+      
+# Genereo un bucle for de 10 iteraciones que me devuelva 10 valores diferentes de los 6 coeficientes.
+for (i in 1:10) { cosites_bc.model[i,] <- fddmx(data,predictors3,backgr)}
+
+# Le doy nombre a las columnas para saber qué coeficientes hay dentro
+colnames(cosites_bc.model) <- c('AUC','COR','Kappa','Sensitivity','Specificity','TSS')
+```
+
+```{r}
+# Hago la media por columnas que es lo que me interesa y lo guardo
+coef_bc.model <- apply(cosites_bc.model, 2, mean)
+write.csv(coef_bc.model,'C:/Users/Irene/Source/Repositorios/TFM-Irene-Extremera/BIOCLIM/coeficientes_BIOCLIM.csv')#Guardo los coeficientes
+coef_bc.model
+```
+
+```{r}
+# Predictiva de presencias
+ext <-extent(-20,35,43,70) #Para Atlántico Norte
+
+predict.presence.bc.bioclim <- predict(object = bc.model,
+                                   x = predictors3,
+                                   ext = ext)
+
+# La pinto
+ggplot() +
+  geom_raster(data = raster::as.data.frame(predict.presence.bc.bioclim , xy = TRUE) , aes(x = x, y = y, fill = layer)) +
+  coord_equal() +
+  labs( x = "", y = "")+theme_minimal()+
+  scale_color_brewer(palette = 'YlGnBu')+ labs(fill='')
+
+
+# La guardo
+saveRDS(predict.presence.bc.bioclim, "C:/Users/Irene/Source/Repositorios/TFM-Irene-Extremera/BIOCLIM/Predicciones_BIOCLIM_Atl.ascii")
+```
+
+En el mapa predictivo se puede ver que  en el Mar del Norte y en la parte de costa Oeste de Gran Bretaña y Francia hay una probabilidad de presencia de hasta el 0.8. Este valor va disminuyendo progresivamente a medida que se aleja de la zona.
+
+# MAXENT
+
+El siguiente modelo a realizar será MAXENT, que es muy sencillo de realizar computacionalmente pero es difícil de interpretarlo en cuanto a lo que hace por dentro.
+
+```{r}
+# Construyo el modelo
+maxent_model <- maxent(predictors3, data,backgr)
+saveRDS(maxent_model, "C:/Users/Irene/Source/Repositorios/TFM-Irene-Extremera/MAXENT/maxent_model_atl.rds")
+
+plot(maxent_model) 
+```
+En la gráfica Variable Contribution, se está midiendo el porcentaje de cada variable en cuando a cómo es de importante a la hora de ajustar el modelo. Según muestra la gráfica las variables mas importantes son la batimetría (70%) y la temperatura media (28%). Siendo salinidad la tercera que mas contribuye con un 2% y odismean con un 0%.
+
+```{r}
+
+fddmx1 <- function(coordenadas, predictores,background){
+
+      group <- kfold(coordenadas, 5)
+
+      pres_train <- coordenadas[group != 1, ] #Las que no sean 1
+      pres_test <- coordenadas[group == 1, ] #Las que sean 1
+      
+      me_m<- maxent(predictores, pres_train,background)
+
+      group <- kfold(background, 5) #Hago 5 grupos de esos puntos
+      backg_train <- background[group != 1, ]
+      backg_test <- background[group == 1, ]
+      
+      eval.modesta <- evaluate(pres_test, backg_test, me_m, predictores)
+      
+      auc_bc.model <- eval.modesta@auc #auc
+      
+      cor_bc.model <- eval.modesta@cor #cor
+      
+      kappa_bc.model <- mean(eval.modesta@kappa) #Kappa
+
+      sensibility_bc.model <- mean(eval.modesta@TPR/(eval.modesta@TPR+eval.modesta@FNR)) #Sensibilidad
+      
+      specificity_bc.modelo <- mean(eval.modesta@TNR/(eval.modesta@FPR+eval.modesta@TNR)) #Especificidad
+      
+      TSSbc.model <- mean(eval.modesta@TPR+eval.modesta@TNR-1) #TSS
+      
+      return(c(auc_bc.model,cor_bc.model,kappa_bc.model,sensibility_bc.model,specificity_bc.modelo,TSSbc.model))
+}
+
+# Hago una matriz para guardar los valores de los coeficientes de las diez iteraciones que me devuelva la función 
+cosites_maxent_model <- matrix(ncol=6,nrow=10) 
+      
+# Genereo un bucle for de 10 iteraciones que me devuelva 10 valores diferentes de los 6 coeficientes.
+for (i in 1:10) { cosites_maxent_model[i,] <- fddmx1(data,predictors3,backgr)}
+
+# Le doy nombre a las columnas para saber qué coeficientes hay dentro
+colnames(cosites_maxent_model) <- c('AUC','COR','Kappa','Sensitivity','Specificity','TSS')
+
+
+# Hago la media por columnas que es lo que me interesa y lo guardo
+coef_mx.model <- apply(cosites_maxent_model, 2, mean)
+coef_mx.model 
+write.csv(coef_mx.model,'C:/Users/Irene/Source/Repositorios/TFM-Irene-Extremera/MAXENT/coeficientes_MAXENT_atln.csv')
+```
+
+```{r}
+# Predicciones de presencia
+
+predict.presence.maxent_model <- dismo::predict(object = maxent_model, 
+                                   x = predictors3, 
+                                   ext = ext)
+# La pinto
+ggplot() +
+  geom_raster(data = raster::as.data.frame(predict.presence.maxent_model , xy = TRUE) , aes(x = x, y = y, fill = layer)) +
+  coord_equal() +
+  labs( x = "", y = "")+theme_minimal()+
+  scale_color_brewer(palette = 'YlGnBu')+ labs(fill='')
+
+# Me guardo el modelo predictivo
+saveRDS(predict.presence.maxent_model, "C:/Users/Irene/Source/Repositorios/TFM-Irene-Extremera/MAXENT/Predicciones_MAXENT_alt.ascii")
+```
+
+Al igual que mostraba BIOCLIM, hay una alta probabilidad de ocurrencia alrededor de la costa de Gran Bretaña y Francia. Sin embargo, en este modelo se aprecia que prácticamente en toda la costa europea hay una alta probabilidad de presencia a excepción de en el interior del mar Blanco y la costa este y oeste de Noruega.
+
+
+
