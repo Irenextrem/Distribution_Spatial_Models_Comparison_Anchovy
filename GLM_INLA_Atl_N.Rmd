@@ -89,7 +89,7 @@ points(data$V1,data$V2)
 ```
 
 ```{r}
-### --- Atlántico Norte & Mediterraneo --- ###
+### --- Atlántico Norte --- ###
 ext<-extent(-20,40,30,70) #Me quedo con las coordenadas propias del area que me interesa 
 
 # Error in RGEOSBinTopoFunc(spgeom1, spgeom2, byid, id, drop_lower_td, unaryUnion_if_byid_false, : TopologyException: Input geom 0 is invalid: Ring Self-intersection at or near point 5.3369464899999999 61.592775340000003 at 5.3369464899999999 61.592775340000003
