@@ -64,7 +64,7 @@ predictors3 <- scale(predictors) #Ya he comprobado que tienen su media en cero e
 # Pseudoausencias
 # Pongo una semilla para que me aparezcan los puntos en el mismo sitio
 # Genero 1000 pseudoausencias en la zona que me interesa
-files<-(list.files("C:/Users/Irene/Source/Repositorios/TFM-Irene-Extremera/Predictores/atl/Seleccionadas", full.names=T, pattern=".tif"))
+files<-(list.files("C:/Users/Irene/Source/Repositorios/TFM-Irene-Extremera/Predictores/atl", full.names=T, pattern=".tif"))
 predictors <- stack(files)
 names(predictors) <- c("bathy","chlomean","ppmean","odismean","salinity","tempmean")
 predictors2 <- scale(predictors)
