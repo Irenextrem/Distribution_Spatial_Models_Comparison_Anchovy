@@ -323,36 +323,48 @@ corvif(sdmdata[,c(2,5,6,7)]) #He ido quitando una a una las que tenían un GVIF 
 
 Las variables con las que me quedaré finalmente han sido: batimetría, oxígeno disuelto, temperatura media y salinidad. 
 
-```{r, echo=FALSE}
+#########################################################
+########### --- Comparación de modelos --- ##############
+#########################################################
 
-# Creo una variable predictores que solo incluya a esas cuatro
-# Solo uso las covariables seleccionadas
+```{r}
+cosites_bc_model <- read.csv("C:/Users/Irene/Source/Repositorios/TFM-Irene-Extremera/BIOCLIM/coeficientes_BIOCLIM_todos.csv")
+cosites_bc_model<- cosites_bc_model[,c(-1)]
 
-cuatro_pred <- (list.files("C:/Users/Irene/Source/Repositorios/TFM-Irene-Extremera/Predictores/atl/Seleccionadas", full.names=T, pattern=".tif")) #Cargo bathy que lo he metido en una carpeta aparte
-predictors <- stack(cuatro_pred)
-names(predictors) <- c("bathy","odismean","salinity","tempmean")
-predictors3 <- scale(predictors)
+cosites_maxent_model <- read.csv("C:/Users/Irene/Source/Repositorios/TFM-Irene-Extremera/MAXENT/coeficientes_MAXENT_atln_todos.csv")
+cosites_maxent_model<-cosites_maxent_model[,-1]
 
+cosites_brt <- read.csv("C:/Users/Irene/Source/Repositorios/TFM-Irene-Extremera/RF y BRT/coeficientes_brt_todos.csv")
+cosites_brt<-cosites_brt[,-1]
 
-# Se carga la base de datos sin las variables con alta colinealidad
-sdmdata <- read.csv("C:/Users/Irene/Source/Repositorios/TFM-Irene-Extremera/Datos/sdmdata_atln_modelos.csv")
-sdmdata <- sdmdata[,-1]
-# Para comprobar que todo está en orden
-# plot(wrld_simpl,xlim=c(-20,35),ylim=c(43,70))
-# points(sdmdata[,6],sdmdata[,7])
+# cosites_brt_rac <- read.csv("C:/Users/Irene/Source/Repositorios/TFM-Irene-Extremera/RF y BRT/coeficientes_brt_rac_todos.csv")
+# cosites_brt_rac<-cosites_brt_rac[,-1]
+
+cosites_rf_model <- read.csv("C:/Users/Irene/Source/Repositorios/TFM-Irene-Extremera/RF y BRT/coeficientes_rf_todos.csv")
+cosites_rf_model<-cosites_rf_model[,-1]
+
+# cosites_rf_rac <- read.csv("C:/Users/Irene/Source/Repositorios/TFM-Irene-Extremera/RF y BRT/coeficientes_rf_rac_todos.csv")
+# cosites_rf_rac<-cosites_rf_rac[,-1]
+
+cosites_glm <- read.csv("C:/Users/Irene/Source/Repositorios/TFM-Irene-Extremera/GLM frecuentista/coeficientes_glmfrec_todas.csv")
+cosites_glm <-cosites_glm[,-1]
+
+# cosites_glm_rac <- read.csv("C:/Users/Irene/Source/Repositorios/TFM-Irene-Extremera/GLM frecuentista/coeficientes_glmrac_todas.csv")
+# cosites_glm_rac<-cosites_glm_rac[,-1]
+
+cosites_gam <- read.csv('C:/Users/Irene/Source/Repositorios/TFM-Irene-Extremera/GAM/coeficientes_gam_todas.csv')
+cosites_gam <-cosites_gam[,-1]
+
+# cosites_gam_rac <- read.csv("C:/Users/Irene/Source/Repositorios/TFM-Irene-Extremera/GAM/coeficientes_gam_rac_todos.csv")
+# cosites_gam_rac<-cosites_gam_rac[,-1]
+
+cosas <- matrix(ncol=6,nrow=10,c(cosites_bc_model[,1],cosites_maxent_model[,1],cosites_brt[,1],cosites_rf_model[,1],cosites_glm[,1],cosites_gam[,1]))
+colnames(cosas)<- c("BIOCLIM","MAXENT","BRT","RF","GLM","GAM")
+nombres<-  c("AUC","COR","KAPPA","SENSITIVITY","SPECIFICIT","TSS")
+
+for(i in 1:6){boxplot(cosites_bc_model[,i],cosites_maxent_model[,i],cosites_brt[,i],cosites_rf_model[,i],cosites_glm[,i],cosites_gam[,i], col=c("red","yellow","green","blue","pink","orange"),ylab=nombres[i])}
 
 ```
 
-##################################
-##### --- Ajuste modelos --- #####
-##################################
 
-El esquema que voy a intentar seguir en los modelos va a ser el siguiente:
-
-- Ajuste
-- Valoración del modelo usando los residuos (Si puede hacerse)
-- Predictiva
-- Plot
-- Validación cruzada
-- Índice de Moran para ver si puede meterse la componente espacial
 
