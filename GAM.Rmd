@@ -1,0 +1,346 @@
+---
+title: "GAM"
+author: "Irene Extremera Serrano"
+date: "9/3/2021"
+output: html_document
+---
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(eval = TRUE, warning = FALSE, error = FALSE, message = FALSE, comment = " ")
+```
+
+````{r, warning=FALSE, message=FALSE, echo= FALSE}
+
+library(sp) #Tabajar con objetos de tipo espacial
+library(rgdal) #Es necesaria para la librería sdmpredictors
+library(carData)
+library(car)
+library(nlme)
+library(gstat)
+library(sf)
+library(spData)
+library(spdep)
+library(lattice)
+library(survival)
+library(Formula)
+library(ggplot2) #Para gráficos de las predicciones
+library(Hmisc)
+library(raster) #Para poder trabajar con objetos tipo raster
+library(leaflet)
+library(GGally)
+library(maptools)
+library(corrplot)
+library(rgeos)
+library(maptools) #Cargar mapas
+library(dismo) #Para poder trabajar con BIOCLIM y MAXENT
+library(sdmpredictors) #Para descargarme las variables ambientales
+library(PresenceAbsence)
+library(rJava)
+library(randomForest)
+library(INLA) #Para trabajar con INLA
+library(Matrix)
+library(parallel)
+library(foreach)
+library(dotCall64)
+library(grid)
+library(spam)
+library(fields)
+library(randomForest) #Para realizar Random Fores
+library(gbm) #Para realizar vosted regression tree
+library(TeachingDemos)
+library(raster)
+library(stars)
+library(mgcv)
+```
+
+#############################
+####### --- Datos --- #######
+#############################
+
+```{r, echo= FALSE}
+
+# Directorio de trabajo
+
+setwd("C:/Users/Irene/Source/Repositorios/TFM-Irene-Extremera/Rmd")
+
+# Mapa del mundo
+data(wrld_simpl) 
+
+#Presencias
+data <- read.csv('C:/Users/Irene/Source/Repositorios/TFM-Irene-Extremera/Datos/Anchoas_Aqua_atln.csv',TRUE,",")
+data <- data[,-1] #Le quito al primera que es una columna de índices
+colnames(data) <- c('Lon','Lat') #Le doy nombre a las columnas
+
+#Predictores modelo
+cuatro_pred <- (list.files("C:/Users/Irene/Source/Repositorios/TFM-Irene-Extremera/Predictores/atl/Seleccionadas", full.names=T, pattern=".tif")) #Cargo bathy que lo he metido en una carpeta aparte
+predictors <- stack(cuatro_pred)
+names(predictors) <- c("bathy","odismean","salinity","tempmean")
+predictors3 <- scale(predictors)
+
+# Ausencias (Con todos los predictores pues es así como se han creado para meterlas al sdmdata_modelos)
+files<-(list.files("C:/Users/Irene/Source/Repositorios/TFM-Irene-Extremera/Predictores/atl", full.names=T, pattern=".tif"))#change directory
+predictores <- stack(files)
+names(predictores) <- c("bathy","chlomean","ppmean","odismean","salinity","tempmean")
+predictors2 <- scale(predictores) #Los escalo
+set.seed(141592) 
+backgr <- randomPoints(predictors2, 1000) 
+
+# Base de datos sin RAC.
+sdmdata <- read.csv("C:/Users/Irene/Source/Repositorios/TFM-Irene-Extremera/Datos/sdmdata_atln_modelos.csv")
+sdmdata <- sdmdata[,-1]
+
+# Base de datos sin escalar
+sdmdata_nos <- read.csv("C:/Users/Irene/Source/Repositorios/TFM-Irene-Extremera/Datos/sdmdata_sin_escalar.csv") #Sin las variables escaladas
+sdmdata_nos<- sdmdata_nos[,c(-1)]
+
+# Para comprobar que todo está en orden
+plot(wrld_simpl,xlim=c(-20,35),ylim=c(43,70))
+points(sdmdata[,6],sdmdata[,7])
+
+## SIN COMPONENTE ESPACIAL 
+#Modelo
+gam1 <- readRDS("C:/Users/Irene/Source/Repositorios/TFM-Irene-Extremera/GAM/gam_model.rds")
+
+#Predictiva
+pred_gam <- readRDS("C:/Users/Irene/Source/Repositorios/TFM-Irene-Extremera/GAM/Predicciones_gam_Atl.ascii")
+
+#Coeficientes
+cosites_gam <- read.csv('C:/Users/Irene/Source/Repositorios/TFM-Irene-Extremera/GAM/coeficientes_gam_todas.csv')
+cosites_gam <-cosites_gam[,-1]
+coef_gam <- read.csv("C:/Users/Irene/Source/Repositorios/TFM-Irene-Extremera/gam frecuentista/coeficientes_gamfrec.csv")
+
+#### CON COMPONENTE ESPACIAL ####
+ddd<- read.csv('C:/Users/Irene/Source/Repositorios/TFM-Irene-Extremera/Datos/rac.csv') #Base de datos con RAC
+ddd<-ddd[,-1]
+
+# Predictores con RAC
+files<-(list.files("C:/Users/Irene/Source/Repositorios/TFM-Irene-Extremera/Predictores/RAC", full.names=T, pattern=".tif"))
+predictors <- stack(files)
+names(predictors) <- c("bathy","odismean","focal_rac_vect","salinity","tempmean")
+predictors_rac <- scale(predictors) 
+
+# Modelo RAC
+gam_rac <-readRDS( "C:/Users/Irene/Source/Repositorios/TFM-Irene-Extremera/GAM/gam_rac.rds")
+
+#Predictiva RAC
+predm_gam_rac <- readRDS( "C:/Users/Irene/Source/Repositorios/TFM-Irene-Extremera/GAM/Predicciones_gam_rac_Atl.ascii")
+
+#Coeficientes RAC
+cosites_gam_rac <- read.csv("C:/Users/Irene/Source/Repositorios/TFM-Irene-Extremera/GAM/coeficientes_gam_rac_todos.csv")
+cosites_gam_rac<-cosites_gam_rac[,-1]
+coef_gam_model_rac <- read.csv('C:/Users/Irene/Source/Repositorios/TFM-Irene-Extremera/GAM/coeficientes_gam_rac.csv')
+
+```
+
+
+
+### --- GAM --- ###
+
+```{r}
+# Modelo sin efecto espacial
+gam1 <- gam(pb ~ s(salinity)+s(bathy)+s(tempmean)+s(odismean), family = binomial, data =sdmdata) 
+
+saveRDS(gam1, "C:/Users/Irene/Source/Repositorios/TFM-Irene-Extremera/GAM/gam_model.rds")
+
+#Aunque ponga un gran número de k en cada uno los resultados de deviance explicada y R^2 varían muy poquito.
+# De hecho el R^2 baja y la deviance aumenta. Probé con 150 de k para cada uno y de deviance aumentaba en 5 unidades.
+
+# gam_op<- gam(pb ~ s(salinity, k = 150) + s(bathy, k = 150) + s(tempmean, k = 150) + 
+#     s(odismean, k = 150), data =sdmdata)
+
+
+# Valoración de los residuos
+par(mfrow=c(2,2))
+gam.check(gam1)
+# gam.check(gam_op)
+
+# summary(gam_op)
+summary(gam1)
+
+```
+
+El $R^2$ es de 0.514 y el porcentaje de deviance explicada es de 45.6%. Saliendo significativas solo bathy y tempmean.
+
+```{r}
+
+#Predictiva
+
+pred_gam<-predict(predictors3,gam1,type='response')
+
+saveRDS(pred_gam, "C:/Users/Irene/Source/Repositorios/TFM-Irene-Extremera/GAM/Predicciones_gam_Atl.ascii")
+
+#Representación
+
+ggplot() +
+  geom_raster(data = raster::as.data.frame(pred_gam , xy = TRUE) , aes(x = x, y = y, fill = layer)) +
+  coord_equal() +
+  labs( x = "", y = "")+theme_minimal()+
+  scale_color_brewer(palette = 'YlGnBu')+ labs(fill='')
+
+
+```
+
+
+```{r}
+# Validación cruzada
+fddmx2 <- function(coordenadas, base_datos,background,model){
+
+      group <- kfold(coordenadas, 5) #kfold(1:1592, 5)
+
+      pres_train <- base_datos[group != 1, ] #Las que no sean 1
+      pres_test <- base_datos[group == 1, ] #Las que sean 1
+      
+      modelo <- update(model, data = pres_train)
+
+      group <- kfold(background, 5) #Hago 5 grupos de esos puntos
+      backg_train <- background[group != 1, ]
+      backg_test <- background[group == 1, ]
+      
+      eval.modesta <- evaluate(pres_test[pres_test==1,],pres_test[pres_test==0,],modelo)
+
+      auc_modelo.model <- eval.modesta@auc #auc
+      
+      cor_modelo.model <- eval.modesta@cor #cor
+      
+      kappa_modelo.model <- mean(eval.modesta@kappa) #Kappa
+
+      sensibility_modelo.model <- mean(eval.modesta@TPR/(eval.modesta@TPR+eval.modesta@FNR)) #Sensibilidad
+      
+      specificity_modelo.modelo <- mean(eval.modesta@TNR/(eval.modesta@FPR+eval.modesta@TNR)) #Especificidad
+      
+      TSS_modelo.model <- mean(eval.modesta@TPR+eval.modesta@TNR-1) #TSS
+      
+      return(c(auc_modelo.model,cor_modelo.model,kappa_modelo.model,sensibility_modelo.model,specificity_modelo.modelo,TSS_modelo.model))
+}
+
+# Hago una matriz para guardar los valores de los coeficientes de las diez iteraciones que me devuelva la función 
+cosites_gam <- matrix(ncol=6,nrow=10) 
+
+# Genereo un bucle for de 10 iteraciones que me devuelva 10 valores diferentes de los 6 coeficientes.
+for (i in 1:10) {cosites_gam[i,] <- fddmx2(sdmdata[,c(6,7)],sdmdata,backgr,gam1)}
+
+# Le doy nombre a las columnas para saber qué coeficientes hay dentro
+colnames(cosites_gam) <- c('AUC','COR','Kappa','Sensitivity','Specificity','TSS')
+write.csv(cosites_gam,'C:/Users/Irene/Source/Repositorios/TFM-Irene-Extremera/GAM/coeficientes_gam_todas.csv')
+
+# Hago la media por columnas que es lo que me interesa y lo guardo
+coef_gam_model <- apply(cosites_gam, 2, mean);coef_gam_model 
+write.csv(coef_gam_model,'C:/Users/Irene/Source/Repositorios/TFM-Irene-Extremera/GAM/coeficientes_gam.csv')
+coef_gam <- read.csv('C:/Users/Irene/Source/Repositorios/TFM-Irene-Extremera/GAM/coeficientes_gam.csv')
+
+```
+
+
+```{r}
+
+nb <- dnearneigh(as.matrix(sdmdata[,c(6,7)]), 1,max(sdmdata[,c(6,7)]));nb 
+listw <- nb2listw(nb,style = "S")
+
+# Autocorrelación espacial
+MoranI <- moran.test(residuals(gam1), listw=listw, randomisation=FALSE); MoranI #p valor de 0.952, no se rechaza H0. No hay autocorrelación espacial.
+Moran_MC <- moran.mc(residuals(gam1), listw=listw, nsim=100); Moran_MC #p valor de 0.9208, no se rechaza H0. No hay autocorrelación espacial
+
+```
+
+A pesar de que no se aprecia autocorrelación espacial se va a valorar el modelo incluyendo la componente espacial con un spline bivariante.
+
+```{r}
+
+# Gam con componente espacial introducida como un spline bivariante de dos dimensiones
+gam_esp_bis <- gam(pb ~ s(salinity)+s(bathy)+s(tempmean)+s(odismean) + s(x,y), family = binomial, data =sdmdata)
+
+saveRDS(gam1, "C:/Users/Irene/Source/Repositorios/TFM-Irene-Extremera/GAM/gam_bi_model.rds")
+
+par(mfrow=c(2,2))
+gam.check(gam_esp_bis)
+
+summary(gam_esp_bis)
+
+```
+
+El $R^2$ es mayor que el anterior, de 0.533 y el porcentaje de deviance explicada es de 49.1%. Se puede apreciar que la variable espacial sale muy significativa.
+
+``` {r}
+
+#Predictiva
+
+# pred_gam_bi <- predict(predictors3, gam_esp_bis, type='response') #No funciona porque la componente espacial no está en predictors3
+# pred_gam_bi <- predict(gam_esp_bis, sdmdata, type='response') #Si funciona pero sale a modo de data frame y luego no se puedehacer el plot
+# 
+# saveRDS(pred_gam, "C:/Users/Irene/Source/Repositorios/TFM-Irene-Extremera/GAM/Predicciones_gam_bi_Atl.ascii")
+# 
+# #Representación
+# 
+# ggplot() +
+#   geom_raster(data = raster::as.data.frame(pred_gam_bi , xy = TRUE) , aes(x = x, y = y, fill = layer)) +
+#   coord_equal() +
+#   labs( x = "", y = "")+theme_minimal()+
+#   scale_color_brewer(palette = 'YlGnBu')+ labs(fill='')
+
+```
+
+```{r}
+# Como con la componente espacial introducida como un spline bivariante no se puede hacer pruebo con RAC
+gam_rac <- gam(pb ~ s(salinity)+s(bathy)+s(tempmean)+s(odismean) + s(focal_rac_vect), family = binomial, data =ddd)
+
+saveRDS(gam_rac, "C:/Users/Irene/Source/Repositorios/TFM-Irene-Extremera/GAM/gam_rac.rds")
+
+summary(gam_rac)
+
+# Valoración de los residuos
+par(mfrow=c(2,2))
+gam.check(gam_rac)
+
+```
+
+El porcentaje de deviance explicada es bastante alto, de hasta un 91,7% t el $R^2$ ajustado también toma valores elevados (0.928). Como significativas salen tempmean, el efecto espacial y batimetría por lo pelos.
+
+```{r}
+
+#Predictiva
+#Primero hago la base de datos
+
+pred_gam_rac <-predict(predictors_rac, gam_rac,type='response')
+
+saveRDS(pred_gam_rac, "C:/Users/Irene/Source/Repositorios/TFM-Irene-Extremera/GAM/Predicciones_gam_rac_Atl.ascii")
+
+#Representación
+
+ggplot() +
+  geom_raster(data = raster::as.data.frame(pred_gam_rac , xy = TRUE) , aes(x = x, y = y, fill = layer)) +
+  coord_equal() +
+  labs( x = "", y = "")+theme_minimal()+
+  scale_color_brewer(palette = 'YlGnBu')+ labs(fill='') #El mapa sigue saliendo raro...
+
+```
+
+
+```{r}
+# Validación cruzada
+# Hago una matriz para guardar los valores de los coeficientes de las diez iteraciones que me devuelva la función 
+cosites_gam_rac <- matrix(ncol=6,nrow=10) 
+
+# Genereo un bucle for de 10 iteraciones que me devuelva 10 valores diferentes de los 6 coeficientes.
+for (i in 1:10) {cosites_gam_rac[i,] <- fddmx2(ddd[,c(6,7)],ddd,backgr,gam_rac)}
+
+# Le doy nombre a las columnas para saber qué coeficientes hay dentro
+colnames(cosites_gam_rac) <- c('AUC','COR','Kappa','Sensitivity','Specificity','TSS')
+write.csv(cosites_gam_rac,'C:/Users/Irene/Source/Repositorios/TFM-Irene-Extremera/GAM/coeficientes_gam_rac_todos.csv')
+
+# Hago la media por columnas que es lo que me interesa y lo guardo
+coef_gam_model_rac <- apply(cosites_gam_rac, 2, mean);coef_gam_model_rac 
+write.csv(coef_gam_model_rac,'C:/Users/Irene/Source/Repositorios/TFM-Irene-Extremera/GAM/coeficientes_gam_rac.csv')
+coef_gam_rac <- read.csv('C:/Users/Irene/Source/Repositorios/TFM-Irene-Extremera/GAM/coeficientes_gam_rac.csv')
+
+```
+
+
+```{r}
+
+nb_rac <- dnearneigh(as.matrix(ddd[,c(6,7)]), 1,max(ddd[,c(6,7)]));nb_rac 
+listw_rac <- nb2listw(nb_rac,style = "S")
+
+# Autocorrelación espacial
+MoranI <- moran.test(residuals(gam_rac), listw=listw_rac, randomisation=FALSE); MoranI #p valor de 0.0002, se rechaza H0. Hay autocorrelación espacial.
+Moran_MC <- moran.mc(residuals(gam_rac), listw=listw_rac, nsim=100); Moran_MC #p valor de 0.0099, se rechaza H0. Hay autocorrelación espacial
+
+```
