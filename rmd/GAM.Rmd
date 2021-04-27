@@ -261,7 +261,7 @@ A pesar de que no se aprecia autocorrelación espacial se va a valorar el modelo
 ```{r}
 
 # Gam con componente espacial introducida como un spline bivariante de dos dimensiones
-gam_esp_bis <- gam(pb ~ s(salinity)+s(bathy)+s(tempmean)+s(odismean) + s(x,y), family = binomial, data =sdmdata)
+gam_esp_bis <- gam(pb ~ s(salinity)+s(bathy)+s(tempmean)+s(odismean) + s(x,y,bs="gp",k=100,m=c(1,1)), family = binomial, data =sdmdata) #Así lo recomienda el libro de Wood
 
 saveRDS(gam_esp_bis, "C:/Users/Irene/Source/Repositorios/TFM-Irene-Extremera/GAM/gam_bi_model.rds")
 
@@ -279,17 +279,111 @@ El $R^2$ es mayor que el anterior, de 0.533 y el porcentaje de deviance explicad
 
 #Predictiva
 
-pred_gam_bi <- predict(gam_esp_bis, sdmdata, type='response') #Si funciona pero sale a modo de data frame y luego no se puede hacer el plot
+pred_gam_bi <- predict(gam_esp_bis, sdmdata, type='response') 
 
 saveRDS(pred_gam_bi, "C:/Users/Irene/Source/Repositorios/TFM-Irene-Extremera/GAM/Predicciones_gam_bi_Atl.ascii")
 
+#Para representarlo
+BD <- sdmdata #Creo una base de datos
+BD$prediction <- pred_gam_bis #Le añado las predicciones
+
 # #Representación
-# 
-# ggplot() +
-#   geom_raster(data = raster::as.data.frame(pred_gam_bi , xy = TRUE) , aes(x = x, y = y, fill = layer)) +
-#   coord_equal() +
-#   labs( x = "", y = "")+theme_minimal()+
-#   scale_color_brewer(palette = 'YlGnBu')+ labs(fill='')
+
+#Opción 1
+ggplot() +
+  geom_raster(data = raster::as.data.frame(BD , xy = TRUE) , aes(x = x, y = y, fill = prediction)) +
+  coord_equal() +
+  labs( x = "", y = "")+theme_minimal()+
+  scale_color_brewer(palette = 'YlGnBu')+ labs(fill='')
+
+```
+
+#Kriging de las predicciones
+```{r}
+salinity<- load_layers(c("BO_salinity"))# datadir = tempdir())
+e=extent(-20,35,43,70) #Extensión con la que trabajo
+sal=crop(salinity,e) #Corto el raster
+
+# Lo pinto
+plot(sal)
+points(ddd$x,ddd$y)
+
+# 2
+#Saco las coordenadas de uno de los rasters. Tengo que agregar porque sino no funciona el kriging.
+loci1 <-as.data.frame(coordinates(sal))
+summary(loci1)
+
+x.range <- as.numeric(c(-19.958, 34.958))  # min/max longitude of the interpolation area
+y.range <- as.numeric(c(42.04,69.96))  #in/max latitude of the interpolation area
+grd <- expand.grid(x = seq(from = x.range[1], to = x.range[2], by =  0.08333333), y = seq(from = y.range[1], 
+                                                                                          to = y.range[2], by =  0.08333333))  # expand points to grid
+coordinates(grd) <- ~x + y #Coordenadas del grid
+proj4string(grd) <- CRS("+init=epsg:4326") #Coordenadas geográficas
+gridded(grd)     <- TRUE  # Create SpatialPixel object
+fullgrid(grd)    <- TRUE  # Create SpatialGrid object
+
+coords <- cbind(ddd$x,ddd$y) #Asigno coordenadas
+matrix<-cbind(BD$prediction,coords) #Uno las coordenadas a los valores de LA PREDICCIÓN
+matrix<-as.data.frame(matrix) #Lo paso a data.frame
+colnames(matrix)<-c("Pred","Lon","Lat") #Renombro
+
+coordinates(matrix) <- c("Lon", "Lat")  #Doy nombre a las coordenadas
+proj4string(matrix) <- CRS("+init=epsg:4326") #Coordenadas geográficas
+
+#Interpolate the grid cells using a power value of 2 (idp=2.0)
+rac <- gstat::idw(Pred~ 1, locations = matrix, newdata=grd, idp=0.1) 
+
+# Plot
+plot(rac,col=tim.colors(100)[1:100],main=" ", axes=T)
+data(wrld_simpl)
+plot(wrld_simpl, add=TRUE,col='dark grey')
+
+#convert to raster
+RAC=as.data.frame(rac) #Paso la interpolación a data.frame
+coordinates(RAC) <- ~ x + y #Le asigno unas coordenadas
+gridded(RAC) <- TRUE #Creo un objeto pixelado espacial
+RAC <- raster(RAC) #Lo transformo en raster
+
+plot(RAC)
+
+#####################################################
+#  CUT WITH BATHY
+##################################################
+
+depth<- load_layers(c("MS_bathy_5m")) #Cargo batimetría
+depth=crop(depth,e) #La corto
+depth=abs(depth) ##funcao abs converte em positivo ### formato raster
+
+## tem que transformar em data.frame
+
+matrix<- cbind(coordinates(depth), depth=getValues(depth)) #Cojo los valores de batimetría para esas coordenadas
+I <- is.na(matrix[,3]) #Identifico NAs
+matrix<- matrix[!I,] #Quito los NAs
+matrix<-as.data.frame(matrix) #Transformo a data.frame
+new <- subset(matrix, matrix$depth > 0) ###trocar profundidade
+###transformar data.frame em raster de novo
+
+xy <- cbind(new$x, new$y) #Me quedo con las coordenadas
+rast<- raster(xmn=-20, xmx=35, ymn=43, ymx=70, nrows=276, ncols=624)#2 
+library(raster)
+p<- rasterize(xy, rast, new$depth, fun=max,na.rm=F) #Hago un raster
+p<-resample(p,sal) #Le doy las dimensiones de salinidad
+e<-extent(p) #
+sp<-crop(RAC,e)
+sp=resample(sp,p)
+sp<-raster::mask(sp,p)
+
+
+# Plot
+plot(sp,col=tim.colors(100)[1:100],main=" ", axes=T,zlim=c(0,1))
+data(wrld_simpl)
+plot(wrld_simpl, add=TRUE,col='dark grey')
+
+plot(RAC,col=tim.colors(100)[1:100],main=" ", axes=T)
+data(wrld_simpl)
+plot(wrld_simpl, add=TRUE,col='dark grey')
+
+# writeRaster(sp, filename="sp_gam_sp_atln.tif", format="GTiff", overwrite=TRUE)
 
 ```
 
