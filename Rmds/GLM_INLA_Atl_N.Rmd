@@ -1,0 +1,1168 @@
+---
+title: "GLM Inla"
+author: "Irene Extremera Serrano"
+date: "14/1/2021"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(eval = TRUE, warning = FALSE, error = FALSE, message = FALSE, comment = " ")
+```
+
+#####################
+### - Librerías - ###
+#####################
+
+````{r, warning=FALSE, message=FALSE, include= FALSE}
+library(sp) #Tabajar con objetos de tipo espacial
+library(rgdal) #Para que funcione sdmpredictors
+library(carData)
+library(car)
+library(nlme)
+library(gstat)
+library(sf)
+library(spData)
+library(spdep)
+library(lattice)
+library(survival)
+library(Formula)
+library(ggplot2)
+library(Hmisc)
+library(raster) #Para poder trabajar con objetos tipo raster
+library(leaflet)
+library(GGally)
+library(GISTools) #Para guardar coast y no tener que ejecutarlo
+library(maptools)
+# library(GADM) #Para poder coger el mapa de Europa y cortarlo
+library(corrplot)
+library(rgeos)
+library(maptools) #Cargar mapas
+library(dismo) #Para poder trabajar con bioclim
+library(sdmpredictors) #Para descargarme las variables ambientales
+library(PresenceAbsence)
+library(rJava)
+library(randomForest)
+library(INLA) #Para trabajar con INLA
+library(Matrix)
+library(parallel)
+library(foreach)
+library(dotCall64)
+library(grid)
+library(spam)
+library(fields)
+library(classInt) 
+library(GADMTools)
+
+```
+
+#########################
+### - Datos y demás - ###
+#########################
+
+```{r,include=FALSE}
+
+data(wrld_simpl) #Cargo el mapa del mundo
+
+# Datos
+data <- read.csv('C:/Users/Irene/Source/Repositorios/TFM-Irene-Extremera/Datos/Anchoas_Aqua_atln.csv',TRUE,",")
+data<- data[-1]
+
+
+# Predictores
+
+files<-(list.files("C:/Users/Irene/Source/Repositorios/TFM-Irene-Extremera/Predictores/atl/Seleccionadas", full.names=T, pattern=".tif"))
+predictors <- stack(files)
+names(predictors) <- c("bathy","odismean","salinity","tempmean")
+
+# Escalo los valores para que al hacer el análisis todas las variables tengan la misma escala 
+predictors3<- scale(predictors)
+
+
+# Cargo la base de datos
+
+sdmdata <- read.csv("C:/Users/Irene/Source/Repositorios/TFM-Irene-Extremera/Datos/sdmdata_atln_modelos.csv")
+sdmdata <- sdmdata[,c(-1)]
+
+mapa <- readRDS("C:/Users/Irene/Source/Repositorios/TFM-Irene-Extremera/Rmd/mapa_recortado.rds") #Mapa final recortado
+# plot(mapa)
+
+# Dibujo el mapa con los ejes mas grandes para ver si hay algún valor que está fuera de la zona que me interesa
+plot(wrld_simpl, xlim= c(-10,40),ylim=c(36,75), axes=TRUE,col="light yellow")
+points(sdmdata$x, sdmdata$y, col="pink", pch=20, cex=0.75)
+
+# Representación de las presencias y de la costa recortada
+coast<-readOGR("C:/Users/Irene/Source/Repositorios/TFM-Irene-Extremera/GLM INLA/coast.shp")
+plot(coast)
+points(data[,1:2], pch=20)
+
+# Modelo sin efecto espacial
+model_sin_es<-readRDS("C:/Users/Irene/Source/Repositorios/TFM-Irene-Extremera/GLM INLA/modelo_inla_sin_es.rds")
+model_pred_sine<- readRDS("C:/Users/Irene/Source/Repositorios/TFM-Irene-Extremera/GLM INLA/model_pred_sine.rds")
+
+# Coeficientes no sp
+coe_sin_es <- read.csv("C:/Users/Irene/Source/Repositorios/TFM-Irene-Extremera/GLM INLA/coe_inla_sin_es.csv")
+
+# Coeficientes CV no sp
+coef_cv_sine <- read.csv("C:/Users/Irene/Source/Repositorios/TFM-Irene-Extremera/GLM INLA/cv_inla_sin_estss.csv")
+coef_cv_sine<-coef_cv_sine[,-1]
+# Modelo con efecto espacial
+model.est<- readRDS("C:/Users/Irene/Source/Repositorios/TFM-Irene-Extremera/GLM INLA/modelo_inla.rds")
+model.pred<-readRDS("C:/Users/Irene/Source/Repositorios/TFM-Irene-Extremera/GLM INLA/model_pred.rds")
+
+# Coeficientes sp
+coe_es <- read.csv("C:/Users/Irene/Source/Repositorios/TFM-Irene-Extremera/GLM INLA/coe_inla_es.csv")
+
+# Coeficientes CV sp
+coef_cv_e <- read.csv("C:/Users/Irene/Source/Repositorios/TFM-Irene-Extremera/GLM INLA/cv_inla_estss.csv")
+coef_cv_e<-coef_cv_e[,-1]
+
+```
+
+########################
+### --- GLM INLA --- ###
+########################
+
+###############################
+### - Sin efecto espacial - ###
+###############################
+
+```{r}
+
+# Polígono que incluya los puntos de presencias en Atlántico Norte:
+
+xym <- as.matrix(data.frame(x=c(-11,0,0,9,9,
+                                -11,-11),
+                            y=c(43,43,43,55,60,
+                                60,43)))
+                        
+
+p = Polygon(xym) #Paso de matriz a polígono
+ps = Polygons(list(p),1) #Lo transformo en lista.
+sps = SpatialPolygons(list(ps)) #Lo transformo en un polígono espacial 
+
+# par(mfrow=c(1,1))
+# plot(sps) #Polígono
+# points(sdmdata[,6:7][which(sdmdata$pb==1),], col="red", pch=20) #Presencia
+# points(sdmdata[,6:7][which(sdmdata$pb==0),], col="blue", pch=1) #Ausencia
+
+```
+
+# Obtención del mapa
+
+```{r,echo=FALSE}
+
+### --- Atlántico Norte --- ###
+
+ext<-extent(-11,43,9,60) #Me quedo con las coordenadas propias del area que me interesa 
+
+# Paises a usar: España, Francia, Irlanda, Reino Unido, Islandia, Alemania, Dinamarca, Noruega, Suecia, Finlandia, Letonia,Estonia, Lituania, Polonia, Rusia, Luxemburgo,Portugal, Bélgica, Paises Bajos.
+
+# ccodes() #Para sacar los códigos de cada pais.
+
+# Todo este código es para descargar los paises por separado.
+
+# est <-getData('GADM',country="EST",level=0,download = TRUE)
+# lit <- getData('GADM',country="LTU",level=0,download = TRUE)
+# polon <-getData('GADM',country="POL",level=0,download = TRUE)
+# rusia <-getData('GADM',country="RUS",level=0,download = TRUE)
+# luxen <- getData('GADM',country="LUX",level=0,download = TRUE)
+# port<- getData('GADM',country="PRT",level=0,download = TRUE)
+# belg<-getData('GADM',country="BEL",level=0,download = TRUE)
+# paises_b <-getData('GADM',country="NLD",level=0,download = TRUE)
+
+
+# Y todo este es para cargar los archivos descargados y así no tener que descargarlos cada vez que trabaje con ellos. 
+
+# setwd("C:/Users/Irene/Source/Repositorios/TFM-Irene-Extremera/Rmd/Paises")
+# spain <- readRDS("gadm36_ESP_0_sp.rds")
+# fra <-  readRDS("gadm36_FRA_0_sp.rds")
+# irlanda <-readRDS("gadm36_IRL_0_sp.rds")
+# rei_uni <- readRDS("gadm36_GBR_0_sp.rds")
+# islandia <- readRDS("gadm36_ISL_0_sp.rds")
+# germ <- readRDS("gadm36_DEU_0_sp.rds")
+# dinam <- readRDS("gadm36_DNK_0_sp.rds")
+# norueg <- readRDS("gadm36_NOR_0_sp.rds")
+# suecia <-readRDS("gadm36_SWE_0_sp.rds")
+# finland <-readRDS("gadm36_FIN_0_sp.rds")
+# let <-readRDS("gadm36_LVA_0_sp.rds")
+# est <-readRDS("gadm36_EST_0_sp.rds")
+# lit <- readRDS("gadm36_LTU_0_sp.rds")
+# polon <-readRDS("gadm36_POL_0_sp.rds")
+# rusia <-readRDS("gadm36_RUS_0_sp.rds")
+# luxen <- readRDS("gadm36_LUX_0_sp.rds")
+# port<- readRDS("gadm36_PRT_0_sp.rds")
+# belg<-readRDS("gadm36_BEL_0_sp.rds")
+# paises_b <-readRDS("gadm36_NLD_0_sp.rds")
+
+
+# Si la anterior no funciona a la hora de cargar uso esta.
+
+# spain <-readRDS("C:/Users/Irene/Source/Repositorios/TFM-Irene-Extremera/Rmd/Paises/gadm36_ESP_0_sp.rds")
+# fra <-   readRDS("C:/Users/Irene/Source/Repositorios/TFM-Irene-Extremera/Rmd/Paises/gadm36_FRA_0_sp.rds")
+# irlanda <- readRDS("C:/Users/Irene/Source/Repositorios/TFM-Irene-Extremera/Rmd/Paises/gadm36_IRL_0_sp.rds")
+# rei_uni <- readRDS("C:/Users/Irene/Source/Repositorios/TFM-Irene-Extremera/Rmd/Paises/gadm36_GBR_0_sp.rds")
+# islandia <- readRDS("C:/Users/Irene/Source/Repositorios/TFM-Irene-Extremera/Rmd/Paises/gadm36_ISL_0_sp.rds")
+# germ <- readRDS("C:/Users/Irene/Source/Repositorios/TFM-Irene-Extremera/Rmd/Paises/gadm36_DEU_0_sp.rds")
+# dinam <- readRDS("C:/Users/Irene/Source/Repositorios/TFM-Irene-Extremera/Rmd/Paises/gadm36_DNK_0_sp.rds")
+# norueg <- readRDS("C:/Users/Irene/Source/Repositorios/TFM-Irene-Extremera/Rmd/Paises/gadm36_NOR_0_sp.rds")
+# suecia <- readRDS("C:/Users/Irene/Source/Repositorios/TFM-Irene-Extremera/Rmd/Paises/gadm36_SWE_0_sp.rds")
+# finland <-  readRDS("C:/Users/Irene/Source/Repositorios/TFM-Irene-Extremera/Rmd/Paises/gadm36_FIN_0_sp.rds")
+# let <-readRDS("C:/Users/Irene/Source/Repositorios/TFM-Irene-Extremera/Rmd/Paises/gadm36_LVA_0_sp.rds")
+# est <-readRDS("C:/Users/Irene/Source/Repositorios/TFM-Irene-Extremera/Rmd/Paises/gadm36_EST_0_sp.rds")
+# lit <- readRDS("C:/Users/Irene/Source/Repositorios/TFM-Irene-Extremera/Rmd/Paises/gadm36_LTU_0_sp.rds")
+# polon <-readRDS("C:/Users/Irene/Source/Repositorios/TFM-Irene-Extremera/Rmd/Paises/gadm36_POL_0_sp.rds")
+# # rusia <-readRDS("RUS_adm0.rds")
+# luxen <- readRDS("C:/Users/Irene/Source/Repositorios/TFM-Irene-Extremera/Rmd/Paises/gadm36_LUX_0_sp.rds")
+# port<- readRDS("C:/Users/Irene/Source/Repositorios/TFM-Irene-Extremera/Rmd/Paises/gadm36_PRT_0_sp.rds")
+# belg<-readRDS("C:/Users/Irene/Source/Repositorios/TFM-Irene-Extremera/Rmd/Paises/gadm36_BEL_0_sp.rds")
+# paises_b <-readRDS("C:/Users/Irene/Source/Repositorios/TFM-Irene-Extremera/Rmd/Paises/gadm36_NLD_0_sp.rds")
+# rusia<-readRDS("C:/Users/Irene/Source/Repositorios/TFM-Irene-Extremera/Rmd/Paises/gadm36_RUS_0_sp.rds")
+
+# Hago un polígono que incluya la zona marítima y la costa para posteriormente representarlo
+
+ext<-extent(-11,43,9,60)
+
+xym2<- as.matrix(data.frame(x = c(min(sdmdata$x)-3, max(sdmdata$x)+2, max(sdmdata$x)+2, min(sdmdata$x)-3), 
+                           y = c(43, 43, max(sdmdata$y)+1, max(sdmdata$y)+1)))
+
+p2 = Polygon(xym2) 
+ps2 = Polygons(list(p2),1) 
+sps2 = SpatialPolygons(list(ps2))  
+
+
+#Represento el resultado
+# 
+# par(mfrow=c(1,1))
+# plot(sps2)
+# points(sdmdata[,6:7], pch=20)
+
+```
+
+# Zona con la que se va a trabajar
+
+```{r}
+
+#Recorto la zona
+
+m_atn_rec<-crop(mapa, sps) #Me interesa este trozo de mapa del polígono
+# par(mfrow=c(1,2))
+# plot(m_atn_rec) #Veo cómo queda
+# points(data[,1:2], pch=20) #Pinto las presencias
+
+proj4string(sps)<-proj4string(m_atn_rec) # Da unos atributos a sps que tiene m_atn_rec
+
+plot(m_atn_rec) #Zonas costeras recortadas
+
+
+### --- Selecciono el polígono que contiene los datos --- ###
+
+# coast <- gDifference(sps, m_atn_rec) #Con esta función me va extrayendo esa parte de tierra
+# shapefile(x = coast, file = "C:/Users/Irene/Source/Repositorios/TFM-Irene-Extremera/GLM INLA/coast.shp", overwrite=TRUE)
+# plot(coast)
+
+### --- Dibujo los datos --- ###
+# 
+# plot(sps) #Polígono
+# points(sdmdata[,6:7][which(sdmdata$pb==1),], col="red", pch=20) #Presencia
+# points(sdmdata[,6:7][which(sdmdata$pb==0),], col="blue", pch=1) #Ausencia
+# legend(-25, 50, legend=c("presence", "absence"), col=c("red", "blue"), pch=20) #Leyenda
+# plot(m_atn_rec, add=TRUE, col="gray") #Parte de la costa recortada
+#dev.off()
+
+```
+
+Una vez que he conseguido la zona extrayendo la costa puedo ponerme a trabajar en el mesh y a modelizar.
+
+################
+### - Mesh - ###
+################
+
+```{r}
+
+### --- Construyo el mesh --- ###
+#### Creo el dominio que voy a estudiar con la función inla.nonconvex.hull()
+
+boundary<-inla.nonconvex.hull(as.matrix(sdmdata[,6:7])) #Como boundary utilizo los datos de longitud y latitud de presencias y ausencias
+
+mesh<-inla.mesh.2d(boundary=boundary, max.edge=c(1, 3), #Primer elemento longitud triángulo interior y segundo elemento longitud del triángulo exterior
+                   cutoff=0.01,  offset=c(-0.9, -0.09)) #Cutoff es el ángulo mínimo del triángulo // # offset es el espacio externo de la figura.
+
+# Pinto el mesh con el mapa y los datos
+
+plot(mesh)
+plot(mesh, add=TRUE)
+plot(mapa, add=TRUE, col="gray")
+points(sdmdata[,6:7][which(sdmdata$pb==1),], col="pink", pch=20)
+points(sdmdata[,6:7][which(sdmdata$pb==0),], col="black", pch=20)
+
+```
+
+##################
+### - Modelo - ###
+##################
+
+```{r}
+
+### --- Defino el spde --- ####
+
+spde <- inla.spde2.matern(mesh) 
+
+
+### --- Matriz que relaciona los datos con el mesh --- ###
+
+A.est <- inla.spde.make.A(mesh, loc=cbind(sdmdata$x, sdmdata$y))
+
+
+### --- inla.stack to stimate --- ###
+stk.est<-inla.stack(data=list(y=sdmdata$pb), #Variable respuesta
+                    A=list(A.est, 1), #Matriz de covarianzas
+                    effects=list(spatial=1:spde$n.spde, #Los efectos que quiera
+                                 data.frame(beta0=1, sdmdata[,c(2:5)])), #mete el b0 y todas las covariables
+                    tag='est')
+
+### --- Response variable --- ###
+resp<-sdmdata$pb
+
+# Modelo
+formula0 <- y~ -1 + beta0  + bathy + odismean +tempmean + salinity
+# model_sin_es <- inla(formula0, #Meto la fórmula
+#                   data=inla.stack.data(stk.est), family="binomial" , 
+#                   control.compute=list(dic=TRUE,cpo=TRUE, waic=TRUE, return.marginals=TRUE), #Criterios de calidad
+#                   control.predictor=list(A=inla.stack.A(stk.est), compute=TRUE,
+#                                          quantiles=c(0.025, 0.25, 0.5, 0.75, 0.975)),
+#                   # control.family=list(quantile=c(0.025)),
+#                   # control.inla=list(strategy = "laplace"),
+#                   num.threads = 4,
+#                  verbose=T)
+
+
+# saveRDS(model_sin_es, "C:/Users/Irene/Source/Repositorios/TFM-Irene-Extremera/GLM INLA/modelo_inla_sin_es.rds")
+model_sin_es<-readRDS("C:/Users/Irene/Source/Repositorios/TFM-Irene-Extremera/GLM INLA/modelo_inla_sin_es.rds")
+summary(model_sin_es)
+
+
+# mean(model_sin_es$cpo$cpo)
+# mean(model_sin_es$po$po)
+# model_sin_es$waic$waic
+# model_sin_es$dic$dic
+# coe_sines <- matrix(c(mean(model_sin_es$cpo$cpo),mean(model_sin_es$po$po),model_sin_es$waic$waic
+# ,model_sin_es$dic$dic),ncol=,nrow=1)
+# colnames(coe_sines) <- c("CPO","PO","WAIC","DIC")
+# write.csv(coe_sines, "C:/Users/Irene/Source/Repositorios/TFM-Irene-Extremera/GLM INLA/coe_inla_sin_es.csv")
+
+```
+
+```{r}
+
+#Miro la probabilidad de que el valor del parámetro tome el valor de 0
+
+1-inla.pmarginal(0, model_sin_es$marginals.fixed$beta0) #P(beta0>0) Bo solo toma valores negativos
+1-inla.pmarginal(0, model_sin_es$marginals.fixed$bathy) #P(bathy>0) bathy solo toma valores positivos
+1-inla.pmarginal(0, model_sin_es$marginals.fixed$odismean) #P(odismean>0) la probabilidad de que odismean sea mayor que 0 es muy pequeña
+1-inla.pmarginal(0, model_sin_es$marginals.fixed$tempmean) #P(tempmean>0) la probabilidad de que tempmean sea mayor que 0 es muy muy pequeña
+1-inla.pmarginal(0, model_sin_es$marginals.fixed$salinity) #P(tempmean>0) la probabilidad de que salinity sea mayor que 0 es muy pequeñaa
+
+```
+
+Para ver lo anterior de forma gráfica se realizan las siguientes figuras:
+
+```{r}
+
+### --- Plot posteriors --- ###
+
+par(mfrow=c(1,2))
+
+plot(model_sin_es$marginals.fixed$beta0, type="l",main="Posterior distribution of Beta 0") #No incluye al 0
+abline(v=0, col="red", lwd=2)
+
+plot(model_sin_es$marginals.fixed$bathy, type="l",main="Posterior distribution of Bathy") #No incluye al 0
+abline(v=0, col="red", lwd=2)
+
+plot(model_sin_es$marginals.fixed$odismean, type="l",main="Posterior distribution of Odismean") #Incluye al 0
+abline(v=0, col="red", lwd=2)
+
+plot(model_sin_es$marginals.fixed$tempmean, type="l",main="Posterior distribution of Tempmean") #Incluye al 0 pero poco
+abline(v=0, col="red", lwd=2)
+
+plot(model_sin_es$marginals.fixed$salinity, type="l",main="Posterior distribution of Salinity") #Incluye al 0
+abline(v=0, col="red", lwd=2)
+
+```
+
+```{r}
+
+# Plot del modelo
+plot(model_sin_es) #IMPORTANTE: No sale el plot del modelo ¿habrá otra forma de sacarlo?
+
+```
+
+#######################
+### - Prediccioón - ###
+#######################
+
+```{r}
+### -- Definir que la predicción se haga SOLO dentro del mar -- ###
+dxy <- apply(bbox(coast),1, diff)
+r <- dxy[1]/dxy[2]
+m<-150
+proj.grid.mat <- inla.mesh.projector(mesh, 
+                                     xlim=bbox(coast)[1,],
+                                     ylim=bbox(coast)[2,] ,
+                                     dims=c(r, 1)*m)
+
+ov <- over(SpatialPoints(proj.grid.mat$lattice$loc, coast@proj4string), 
+           coast) #hago una limpieza definiendo NAs los valores que se encuentran fuera de mi boundary
+
+i.map <- is.na(ov) # chequeo los puntos del grid que esten dentro de mi mapa
+
+
+### --- Matrix proyectará las coordenadas del test al mesh--- ###
+a.pred <- inla.spde.make.A(mesh, loc=proj.grid.mat$lattice$loc[!i.map, ])
+
+### --- Stack de la predicción --- ###
+stk.pred <- inla.stack(data=list(y=NA),
+                       A=list(a.pred, 1), 
+                       effects=list(spatial=1:spde$n.spde,
+                                    data.frame(beta0 = 1, 
+                                               extract( predictors3, 
+                                                        proj.grid.mat$lattice$loc[!i.map, ]))),
+                       tag='pred')
+
+stk <- inla.stack(stk.est, stk.pred)
+
+
+### --- Modelo Predictivo --- ###
+
+model_pred_sine <- inla(formula0,
+                   data=inla.stack.data(stk), family="binomial",
+                   control.predictor=list(A=inla.stack.A(stk), compute=TRUE, link=1),
+                   control.inla=list(strategy = "simplified.laplace"), # Strategy
+                   # control.mode=list(model.est$mode$theta, restart=TRUE), #Mode
+                   control.results=list(return.marginals.random=FALSE,
+                                        return.marginals.predictor=FALSE), # Avoid some marginals
+                   num.threads = 4,
+                   verbose=FALSE) # La predicción se hace con training
+
+# saveRDS(model_pred_sine, "C:/Users/Irene/Source/Repositorios/TFM-Irene-Extremera/GLM INLA/model_pred_sine.rds")
+model_pred_sine<- readRDS("C:/Users/Irene/Source/Repositorios/TFM-Irene-Extremera/GLM INLA/model_pred_sine.rds")
+
+```
+
+```{r}
+
+####################################################
+########### --- Plot predictions --- ###############
+####################################################
+### index for the prediction data
+idx <- inla.stack.index(stk, 'pred')$data 
+
+summary(model_pred_sine$summary.fitted.val$mean[idx]) #Predicción de la presencia de la especie oscila de entre 0.00272 hasta una probabilidad de 0.9566
+
+### --- Organize probabilities into a matrix to visualize --- ###
+prob.mean0 <- prob.sd0 <- prob.0.0250<- prob.0.9750 <- matrix(NA, proj.grid.mat$lattice$dims[1],
+                                                          proj.grid.mat$lattice$dims[2])
+prob.mean0[!i.map] <- c(model_pred_sine$summary.fitted.val$mean[idx])
+prob.sd0[!i.map] <- c(model_pred_sine$summary.fitted.val$sd[idx])
+prob.0.0250[!i.map] <- c(model_pred_sine$summary.fitted.val$`0.025quant`[idx])
+prob.0.9750[!i.map] <- c(model_pred_sine$summary.fitted.val$`0.975quant`[idx])
+
+```
+
+```{r}
+#### --- plot de la probabilidad --- ###
+
+#pdf("predictive.pdf", width=10, height = 10)
+### --- Spatial effect --- ### 
+# Son probabilidades de 0 a 1 de encontrar la especie. 
+
+par(mfrow=c(2,2))
+par(mar=c(2,3,3,6))
+
+### --- posterior predictive mean --- ###
+plot(sps2, col="gray", main="Predictiva mean")
+image.plot(proj.grid.mat$x, 
+           proj.grid.mat$y,
+           prob.mean0, add=TRUE, zlim=c(0,1)) #En ved de image.plot se puede usar ggplot
+
+plot(m_atn_rec, add=TRUE)
+
+# points(sdmdata[,6:7][which(sdmdata$pb==1),], col="red", pch=20)
+# points(sdmdata[,6:7][which(sdmdata$pb==0),], col="blue", pch=20)
+
+### --- posterior predictive sd --- ###
+plot(sps2, col="gray", main="Predictiva sd")
+image.plot(proj.grid.mat$x, 
+           proj.grid.mat$y,
+           prob.sd0, add=TRUE, zlim=c(0,1))
+plot(m_atn_rec, add=TRUE)
+# points(sdmdata[,6:7][which(sdmdata$pb==1),], col="red", pch=20)
+# points(sdmdata[,6:7][which(sdmdata$pb==0),], col="blue", pch=20)
+
+
+### --- posterior predictive q0.025 --- ###
+plot(sps2, col="gray", main="Predictiva q0.025")
+image.plot(proj.grid.mat$x, 
+           proj.grid.mat$y,
+           prob.0.0250, add=TRUE, zlim=c(0,1))
+plot(m_atn_rec, add=TRUE)
+
+### --- posterior predictive q0.975 --- ###
+plot(sps2, col="gray", main="Predictiva q0.975")
+image.plot(proj.grid.mat$x, 
+           proj.grid.mat$y,
+           prob.0.9750, add=TRUE, zlim=c(0,1))
+plot(m_atn_rec, add=TRUE)
+
+#dev.off()
+```
+
+#######################################################################################
+############################# --- Con efecto espacial --- #############################
+#######################################################################################
+
+```{r}
+#####CON EFECTO ESPACIAL 
+
+##--- SELECCION DEL MEJOR MODELO-------------------------------------------
+
+# setwd("C:/Users/Irene/Source/Repositorios/TFM-Irene-Extremera/Rmd")
+# source("C:/Users/Irene/Source/Repositorios/TFM-Irene-Extremera/Rmd/Bdiclcpomodel_stack.R")
+
+
+# variables <- c("bathy", "chlomean", "ppmean","odismean","salinity","tempmean", "f(spatial, model=spde)") #En caso de querer usar todas las variables
+# variables <- c("bathy", "odismean","salinity","tempmean", "f(spatial, model=spde)")
+
+
+### --- Response variable --- ###
+resp<-sdmdata$pb
+
+### --- Call the function --- ###
+# models_bin <-Bdiclcpomodel_stack(resp=resp, variables=variables, datos=inla.stack.data(stk.est), n=20,
+#                                 family="binomial",
+#                                 control.predictor=list(compute=TRUE, A=inla.stack.A(stk.est)),
+#                                 control.compute = list(config=TRUE, dic=TRUE, cpo=TRUE, waic=TRUE),
+#                                 num.threads=3,
+#                                 control.inla=list(strategy="gaussian"),
+#                                 verbose=TRUE)
+
+# saveRDS(models_bin, "best_model_inla.rds")
+# 
+# models_bin<- readRDS("best_model_inla.rds")
+
+# IMPORTANTE: ME DA ERROR AL USAR ESTA FUNCIÓN PARA VER CUÁL ES EL MEJOR MODELO.
+
+
+# Modelo
+formula1 <- y ~ -1 + beta0  + bathy + odismean +tempmean + salinity+  f(spatial,model=spde)
+# model.est <- inla(formula1, #Meto la fórmula
+#                   data=inla.stack.data(stk.est), family="binomial" , #Le introduzco la matriz de estimación y la familia a la que pertenece
+#                   control.compute=list(dic=TRUE,cpo=TRUE, waic=TRUE, return.marginals=TRUE), #Criterios de calidad
+#                   control.predictor=list(A=inla.stack.A(stk.est), compute=TRUE,
+#                                          quantiles=c(0.025, 0.25, 0.5, 0.75, 0.975)),
+# #                   #control.family=list(quantile=c(0.025)),
+#                   # control.inla=list(strategy = "laplace"),
+#                   num.threads = 4,
+#                  verbose=T)
+
+# saveRDS(model.est, "C:/Users/Irene/Source/Repositorios/TFM-Irene-Extremera/GLM INLA/modelo_inla.rds")
+model.est<- readRDS("C:/Users/Irene/Source/Repositorios/TFM-Irene-Extremera/GLM INLA/modelo_inla.rds")
+
+# mean(model.est$cpo$cpo)
+# mean(model.est$po$po)
+# model.est$waic$waic
+# model.est$dic$dic
+# coe_es <- matrix(c(mean(model.est$cpo$cpo),mean(model.est$po$po),model.est$waic$waic
+# ,model.est$dic$dic),ncol=,nrow=1)
+# colnames(coe_es) <- c("CPO","PO","WAIC","DIC")
+# write.csv(coe_es, "C:/Users/Irene/Source/Repositorios/TFM-Irene-Extremera/GLM INLA/coe_inla_es.csv")
+```
+
+Todos lo coeficientes incluyen el cero en su intervalo de credibilidad, por lo tanto mas adelante calcularé cúal es la probabilidad de que esos coeficientes tomen el valor de cero.
+
+
+```{r}
+
+#Miro la probabilidad de que el valor del parámetro tome el valor de 0
+
+1-inla.pmarginal(0, model.est$marginals.fixed$beta0) #P(beta0>0) Es mas probable que beta 0 tome valores negativos
+1-inla.pmarginal(0, model.est$marginals.fixed$bathy) #P(bathy>0) Hay una probabilidad muy alta de que el coeficiente de bathy no tome el valor de cero y si un valor positivo
+1-inla.pmarginal(0, model.est$marginals.fixed$odismean) #P(odismean>0) El valor del coeficiente probablemente sea positivo, pero hay una probabilidad de 0.34 de ser negativo
+1-inla.pmarginal(0, model.est$marginals.fixed$tempmean) #P(tempmean>0) Al igual que con batimetría, la probabilidad de que el coeficiente no tome el valor de 0 es bastante alta y además tomará sobretodo valores positivos
+1-inla.pmarginal(0, model.est$marginals.fixed$salinity) #La probabilidad de que el coeficiente tome un valor superior a cero no es muy diferente de que no lo tome
+
+```
+
+```{r}
+
+### --- Plot posteriors --- ###
+
+par(mfrow=c(1,2))
+
+plot(model.est$marginals.fixed$beta0, type="l",main="Posterior distribution of Beta 0") #Incluye al 0
+abline(v=0, col="red", lwd=2)
+
+plot(model.est$marginals.fixed$bathy, type="l",main="Posterior distribution of Bathy") #El valor para el coeficiente de bathy entra el cero pero con una probabilidad baja (0.3)
+abline(v=0, col="red", lwd=2)
+
+plot(model.est$marginals.fixed$odismean, type="l",main="Posterior distribution of Odismean") #El coeficiente de odismean está centrado en 0
+abline(v=0, col="red", lwd=2)
+
+plot(model.est$marginals.fixed$tempmean, type="l",main="Posterior distribution of Tempmean") #La distribución de tempmean incluye al cero
+abline(v=0, col="red", lwd=2)
+
+plot(model.est$marginals.fixed$salinity, type="l",main="Posterior distribution of Salinity") #Está casi centrado en 0 el coeficiente de salinidad
+abline(v=0, col="red", lwd=2)
+
+```
+
+En las gráficas anteriores se ve representado lo comentado anteriormente en el cálculo de la probabilidad de que los coeficientes tomasen valores superiores a 0.
+
+```{r}
+
+# Plot del modelo
+plot(model.est) #IMPORTANTE: No sale el plot del modelo ¿habrá otra forma de sacarlo?
+
+```
+
+```{r}
+
+####################################################
+##### --- Posterior distribution hyperpars --- #####
+####################################################
+### --- Miro si el rango es mas pequeño que el offset --- ###
+
+spde.result = inla.spde2.result(model.est, "spatial", spde, do.transform=TRUE) #El argumento do.transform=TRUE indica que quiero las marginales
+                                      
+range<-inla.emarginal(function(x) x, spde.result$marginals.range.nominal[[1]]) # se calcula la media del rango del efecto espacial (el rango es la media del efecto espacial)
+                                                                               # En caso de que me interesase la media de la desviación típica usaría function(x) sqrt(x) 
+
+
+### --- Miro si el rango es mas pequeño que el offset --- ###
+
+range < max(diff(range(sdmdata[,6])), diff(range(sdmdata[,7])))*0.40
+
+#IMPORTANTE: Sale FALSE hay que revisar el mesh. El resultado me indica que la distancia a la que están correlacionadas las obervaciones supera el 40% del area
+
+# Si el rango es un 40% del area es mejor (busco que me salga TRUE) y si no me sale tampoco me tengo que preocupar porque no es un criterio esencial.
+# Es una llamada de atención y lo que habría que hacer es reconsiderar si el mesh está bien. Sobretodo prestar atención a los bordes.
+
+# El rango es la distancia a la que dejan de estar correlacionadas las observaciones, por lo que tengo que verificar que tenga sentido el rango que tengo para mis datos.
+
+### --- Plot --- ###
+par(mfrow=c(2,2), mar=c(3,3,1,0.5)) 
+plot(spde.result$marginals.range.nominal[[1]], type='l') #Media del efecto espacial
+range #Con mayor probabilidad el valor de media que tome el rango es de 70.85
+
+```
+
+```{r}
+
+##################################################################################
+### --- Interpolación de la media y la desviación típica del efecto espacial--- ##
+##################################################################################
+
+bbox(coast) #Recupera la caja delimitadora espacial de los datos espaciales
+(dxy <- apply(bbox(coast),1, diff)) 
+(r <- dxy[1]/dxy[2]) #Me quedo con este rango
+m<-150 #Si lo pongo muy grande me da error: Error: no se puede ubicar un vector de tamaño 657.3 Mb. Por lo que he puesto 40
+proj.grid.mat <- 
+  inla.mesh.projector(mesh, #Uso esta función para plotear los datos en inla, sino puedo extraer los datos desde el gis.
+                      xlim=bbox(coast)[1,], #Los límites los fijo con los datos de la costa
+                      ylim=bbox(coast)[2,] ,
+                      dims=c(r, 1)*m)
+
+par(mfrow=c(1,1))
+plot(coast)
+points(proj.grid.mat$lattice$loc, pch=20, cex=0.5) #Punto sobre mi mapa
+
+
+### --- Limpio los NAs que quedan fuera del perímetro --- ###
+
+ov <- over(SpatialPoints(proj.grid.mat$lattice$loc, coast@proj4string),
+           coast) #Valores de mar y tierra para saber donde hay NAs
+
+
+### --- check grid points inside the map --- ###
+
+i.map <- is.na(ov)
+
+```
+
+```{r}
+
+### Dibujo los puntos donde he predicho ###
+par(mar=c(0,0,0,0))
+plot(sps)
+lines(coast)
+points(proj.grid.mat$lattice$loc[!i.map,], col="red", cex=0.2)
+points(proj.grid.mat$lattice$loc[i.map,], col="blue", cex=0.2) # En azul donde no queremos que haya efecto espacial y en la parte roja donde quiero que aparezca el efecto espacial
+
+### --- Considero solo los que están dentro del mapa --- ###
+# proj.grid.mat$lattice$loc[i.map, ] 
+#En azul donde no quiero predecir y en rojo donde si quiero
+```
+
+```{r}
+
+### --- Project the values of the mean and sd of the spatial effect --- ###
+mean.g <- inla.mesh.project(proj.grid.mat, model.est$summary.random$spatial$mean)
+sd.g <- inla.mesh.project(proj.grid.mat, model.est$summary.random$spatial$sd)
+quantile_0.025 <- inla.mesh.project(proj.grid.mat, model.est$summary.random$spatial$`0.025quant`)
+quantile_0.975 <- inla.mesh.project(proj.grid.mat, model.est$summary.random$spatial$`0.975quant`)
+
+```
+
+
+```{r}
+
+sd.g[i.map] <- mean.g[i.map] <- quantile_0.025[i.map] <- quantile_0.975[i.map] <- NA  
+# Le indico que esos valores no son para predecir
+
+```
+
+```{r}
+### --- Spatial effect --- ###
+par(mfrow=c(2,2))
+par(mar=c(2,3,3,6))
+
+# El efecto espacial se encuentra en la variabilidad intrínseca de los datos.
+# Por lo que sería una forma de ver por dónde estaría mas o menos mi especie
+
+### --- Posterior mean --- ###
+plot(sps2, col="gray", main="Spatial mean") #Cómo varía el efecto espacial de presencia de la especie
+image.plot(proj.grid.mat$x, 
+           proj.grid.mat$y,
+           mean.g, add=TRUE)
+plot(m_atn_rec, add=TRUE)
+
+### --- Posterior sd --- ###
+plot(sps2, col="gray", main="Spatial sd")
+image.plot(proj.grid.mat$x, 
+           proj.grid.mat$y,
+           sd.g, add=TRUE)
+plot(m_atn_rec, add=TRUE)
+
+
+### --- Posterior q0.025 --- ###
+plot(sps2, col="gray", main="Spatial q0.025")
+image.plot(proj.grid.mat$x, 
+           proj.grid.mat$y,
+           quantile_0.025, add=TRUE)
+plot(m_atn_rec, add=TRUE)
+
+### --- Posterior q0.975 --- ###
+plot(sps2, col="gray", main="Spatial q0.975")
+image.plot(proj.grid.mat$x, 
+           proj.grid.mat$y,
+           quantile_0.975, add=TRUE)
+plot(m_atn_rec, add=TRUE) #Añade el mapa
+#dev.off()
+```
+
+```{r}
+
+###########################################################################
+###########################################################################
+######################### --- Predicción --- ##############################
+###########################################################################
+###########################################################################
+### --- Matrix which link the mesh with coordinates to predict--- ###
+A.pred <- inla.spde.make.A(mesh, loc=proj.grid.mat$lattice$loc[!i.map, ]) #Parte espacial de la matriz de predicción
+#Ahora hago una matriz de predición (la de antes era de estimación) de mi variable respuesta
+
+### --- Stack to predict --- ###
+stk.pred <- inla.stack(data=list(y=NA), #Ahora 
+                       A=list(A.pred, 1), 
+                       effects=list(spatial=1:spde$n.spde, #Hago una lista de lo que quiero dentro del modelo
+                                    data.frame(beta0 = 1, 
+                                               extract(predictors3, #Extraigo desde nuestros predictores los valores de la variable ambientales de este objeto espacial rojo y azul
+                                                       proj.grid.mat$lattice$loc[!i.map, ]))), #Se podría haber hecho fuera pero así también funciona
+                                                       tag='pred')
+
+stk <- inla.stack(stk.est, stk.pred) #Junto las dos matrices de estimación y predicción
+
+
+#### --- modelo --- ###
+formula1 <- y ~ -1 + beta0  + bathy + odismean +tempmean + salinity+  f(spatial,model=spde)
+model.pred <- inla(formula1, #Repito la fórmula de antes
+                      data=inla.stack.data(stk), family="binomial", #Le paso la matriz de estimación conjunta
+                      control.predictor=list(A=inla.stack.A(stk), compute=TRUE, link=1), #Quiero que me devuelva la predicción en una medida de 0 a 1 cuando pongo link=1 #link:link is a vector of length given by the size of the response variable with values 1 if the corresponding data is missing and NA otherwise
+                      control.inla=list(strategy = "simplified.laplace"), # Strategy, hay 3 simplifylaplace, laplace y gaussiana. Es la forma que tiene inla de realizar las operaciones.
+                      control.mode=list(theta=model.est$mode$theta, restart=TRUE), #Mode
+                      control.results=list(return.marginals.random=FALSE, #Que no me de las marginales que ya las tengo
+                      return.marginals.predictor=FALSE), # Avoid some marginals
+                      num.threads = 4, #Número de núcleos
+                      verbose=FALSE)
+
+ 
+# saveRDS(model.pred, "C:/Users/Irene/Source/Repositorios/TFM-Irene-Extremera/GLM INLA/model_pred.rds")
+
+```
+
+```{r}
+
+####################################################
+########### --- Plot predictions --- ###############
+####################################################
+### index for the prediction data
+idx <- inla.stack.index(stk, 'pred')$data 
+
+summary(model.pred$summary.fitted.val$mean[idx]) #Predicción de la presencia de la especie oscila de entre 0.00272 hasta una probabilidad de 0.9566
+
+### --- Organize probabilities into a matrix to visualize --- ###
+prob.mean <- prob.sd <- prob.0.025<- prob.0.975 <- matrix(NA, proj.grid.mat$lattice$dims[1],
+                                                          proj.grid.mat$lattice$dims[2])
+prob.mean[!i.map] <- c(model.pred$summary.fitted.val$mean[idx])
+prob.sd[!i.map] <- c(model.pred$summary.fitted.val$sd[idx])
+prob.0.025[!i.map] <- c(model.pred$summary.fitted.val$`0.025quant`[idx])
+prob.0.975[!i.map] <- c(model.pred$summary.fitted.val$`0.975quant`[idx])
+
+# Si transformo model.pred$summary.fitted.val$`0.975quant`[idx]) en un raster puedo pintarlo con plot
+
+```
+
+```{r}
+#### --- plot del efecto espacial --- ###
+
+#pdf("predictive.pdf", width=10, height = 10)
+### --- Spatial effect --- ### 
+# Son probabilidades de 0 a 1 de encontrar la especie. 
+
+par(mfrow=c(2,2))
+par(mar=c(2,3,3,6))
+
+### --- posterior predictive mean --- ###
+plot(sps2, col="gray", main="Predictiva mean")
+image.plot(proj.grid.mat$x, 
+           proj.grid.mat$y,
+           prob.mean, add=TRUE, zlim=c(0,1)) #En ved de image.plot se puede usar ggplot
+
+plot(m_atn_rec, add=TRUE)
+
+# points(sdmdata[,6:7][which(sdmdata$pb==1),], col="red", pch=20)
+# points(sdmdata[,6:7][which(sdmdata$pb==0),], col="blue", pch=20)
+
+### --- posterior predictive sd --- ###
+plot(sps2, col="gray", main="Predictiva sd")
+image.plot(proj.grid.mat$x, 
+           proj.grid.mat$y,
+           prob.sd, add=TRUE, zlim=c(0,1))
+plot(m_atn_rec, add=TRUE)
+# points(sdmdata[,6:7][which(sdmdata$pb==1),], col="red", pch=20)
+# points(sdmdata[,6:7][which(sdmdata$pb==0),], col="blue", pch=20)
+
+
+### --- posterior predictive q0.025 --- ###
+plot(sps2, col="gray", main="Predictiva q0.025")
+image.plot(proj.grid.mat$x, 
+           proj.grid.mat$y,
+           prob.0.025, add=TRUE, zlim=c(0,1))
+plot(m_atn_rec, add=TRUE)
+
+### --- posterior predictive q0.975 --- ###
+plot(sps2, col="gray", main="Predictiva q0.975")
+image.plot(proj.grid.mat$x, 
+           proj.grid.mat$y,
+           prob.0.975, add=TRUE, zlim=c(0,1))
+plot(m_atn_rec, add=TRUE)
+
+#dev.off()
+```
+
+```{r}
+#Librerias
+library(sp)
+library(rgdal) 
+library(carData)
+library(car)
+library(nlme)
+library(gstat)
+library(sf)
+library(spData)
+library(spdep)
+library(lattice)
+library(survival)
+library(Formula)
+library(Hmisc)
+library(raster) 
+library(leaflet)
+library(GGally)
+library(maptools)
+library(rgeos)
+library(maptools) 
+library(parallel)
+library(foreach)
+library(INLA) 
+library(dotCall64)
+library(grid)
+library(spam)
+library(fields)
+
+library(dplyr)
+library(PresenceAbsence)
+library(MatrixModels)
+
+
+#anchoa 
+sdmdata <- read.csv("C:/Users/Irene/Source/Repositorios/TFM-Irene-Extremera/Datos/sdmdata_atln_modelos.csv")
+sdmdata <- sdmdata[,c(-1)]
+
+
+#shapefile contiene los mapas unidos  de España, Francia y Portugal
+paises <- readRDS("C:/Users/Irene/Source/Repositorios/TFM-Irene-Extremera/Rmd/mapa_recortado.rds") #Mapa final recortado
+
+
+#recortar zona de interés 
+ext<-extent(-11,9,43,60)
+cat <- crop(paises, ext) 
+formula0 <- y~ -1 + beta0  + bathy + odismean +tempmean + salinity
+formula1 <- y ~ -1 + beta0  + bathy + odismean +tempmean + salinity+  f(spatial,model=spde)
+
+#cargar predictores
+files<-(list.files("C:/Users/Irene/Source/Repositorios/TFM-Irene-Extremera/Predictores/atl/Seleccionadas", full.names=T, pattern=".tif"))
+predictors <- stack(files)
+names(predictors) <- c("bathy","odismean","salinity","tempmean")
+
+
+###########################################################################
+### FUNCION DE VALIDACION CRUZADA 10 VECES ###
+###########################################################################
+
+simulacro <- function(DATAANCHOA, CAT, FORMULA, PREDICTORS){
+  
+  #### Dividir mi banco de datos en taining y test ####
+  
+  splitdf <- function(dataframe,fraction, seed=NULL) {
+    
+    if (!is.null(seed)) set.seed(seed)
+    
+    index <- 1:nrow(dataframe)
+    
+    trainindex <- sample(index, trunc(length(index)*fraction))
+    
+    trainset <- dataframe[trainindex, ]
+    
+    testset <- dataframe[-trainindex, ]
+    
+    list(trainset=trainset,testset=testset)
+    
+  }
+  
+  splits <- splitdf( DATAANCHOA,    #DATAANCHOA,
+                     0.8, seed= i )
+  
+  training <- splits$trainset
+  test <- splits$testset
+  
+  
+  ##### Ajustar el modelo espacial  con el trainset #####
+  
+  ### -- Definir polygono y crear MESH -- ###
+  
+  xym <- as.matrix(data.frame(x=c(-11,0,0,9,9,
+                                  -11,-11),
+                              y=c(43,43,43,55,60,
+                                  60,43)))
+  
+  p = Polygon(xym)
+  ps = Polygons(list(p),1) 
+  sps = SpatialPolygons(list(ps))
+  
+  map_rec<-crop( CAT, #CAT,
+                 sps)
+  proj4string(sps)<-proj4string(map_rec)
+  coast <- gDifference(sps, map_rec )
+  
+  ### -- Definir MESH -- ###
+  boundary<-inla.nonconvex.hull(as.matrix(training[,6:7]))
+  mesh<-inla.mesh.2d(boundary=boundary, max.edge=c(1, 3), 
+                     cutoff=0.01,  offset=c(-0.9, -0.09))
+  
+  ### -- Definir SPDE -- ###
+  spde <- inla.spde2.matern(mesh)
+  
+  ### -- Matriz que une los datos con el MESH -- ###
+  A.est <- inla.spde.make.A(mesh, loc=cbind(training$x, training$y))
+  
+  ### -- inla.stack para estimar -- ###
+  Stk.est<-inla.stack(data=list(y=training$pb), #$ anchoa ; $sardina (cambiar dependiendo del banco usado)
+                      A=list(A.est, 1),
+                      effects=list(spatial=1:spde$n.spde,
+                                   data.frame(beta0=1, training[,2:5])),
+                      tag='est')
+  
+  ### -- Estimar el modelo con training -- ###
+  
+  model.est <- inla(FORMULA, #Poner formula0 y formula 
+                    data=inla.stack.data(Stk.est), family="binomial" ,
+                    control.compute=list(dic=TRUE,cpo=TRUE, waic=TRUE, return.marginals=TRUE), 
+                    control.predictor=list(A=inla.stack.A(Stk.est), compute=TRUE, 
+                                           quantiles=c(0.025, 0.25, 0.5, 0.75, 0.975)),     
+                    num.threads = 4,
+                    verbose=F)
+  
+  
+  
+  ##### Hacer la predicción con el trainset #####
+  
+  
+  ### -- Definir SPDE -- ###
+  spde <- inla.spde2.matern(mesh)
+  
+  ### -- Definir que la predicción se haga SOLO dentro del mar -- ###
+  dxy <- apply(bbox(coast),1, diff)
+  r <- dxy[1]/dxy[2]
+  m<-60
+  proj.grid.mat <- inla.mesh.projector(mesh, 
+                                       xlim=bbox(coast)[1,],
+                                       ylim=bbox(coast)[2,] ,
+                                       dims=c(r, 1)*m)
+  
+  ov <- over(SpatialPoints(proj.grid.mat$lattice$loc, coast@proj4string), 
+             coast) #hago una limpieza definiendo NAs los valores que se encuentran fuera de mi boundary
+  
+  i.map <- is.na(ov) # chequeo los puntos del grid que esten dentro de mi mapa
+  
+  ### --- Matrix proyectará las coordenadas del test al mesh--- ###
+  a.pred <- inla.spde.make.A(mesh, loc=proj.grid.mat$lattice$loc[!i.map, ])
+  
+  ### --- Stack de la predicción --- ###
+  stk.pred <- inla.stack(data=list(y=NA),
+                         A=list(a.pred, 1), 
+                         effects=list(spatial=1:spde$n.spde,
+                                      data.frame(beta0 = 1, 
+                                                 extract( PREDICTORS, #PREDICTORS, 
+                                                          proj.grid.mat$lattice$loc[!i.map, ]))),
+                         tag='pred')
+  
+  stk <- inla.stack(Stk.est, stk.pred)
+  
+  
+  ### --- Modelo Predictivo --- ###
+  
+  model.pred <- inla(FORMULA, 
+                     data=inla.stack.data(stk), family="binomial",
+                     control.predictor=list(A=inla.stack.A(stk), compute=TRUE, link=1), 
+                     control.inla=list(strategy = "simplified.laplace"), # Strategy
+                     #control.mode=list(model.est$mode$theta, restart=TRUE), #Mode 
+                     control.results=list(return.marginals.random=FALSE,
+                                          return.marginals.predictor=FALSE), # Avoid some marginals
+                     num.threads = 4,
+                     verbose=FALSE) # La predicción se hace con training
+  
+  #Error in inla.check.control(control.mode, data) : 
+  #Name `' in control-argument `control.mode', is void.
+  #  Valid ones are:
+  #	fixed
+  #	restart
+  #	result
+  #	theta
+  #	x
+  
+  
+  ### --- Indice para prediccion del test --- ###
+  idx <- inla.stack.index(stk, 'pred')$data #extraer los valores de la prediccion con un indice
+  
+  
+  
+  ##### Crear dataset unico co presencias/ausencias para mis valores actuales y predichos #####
+  
+  # Hay que hacer un unico dataframe con coordenadas, presencia/ausencia del test y
+  #Prob Media de presencia/ausencia (en 0/1) del modelo predictivo
+  
+  prob.mean  <- matrix(NA, proj.grid.mat$lattice$dims[1], proj.grid.mat$lattice$dims[2]) #Calculo la media
+  prob.mean[!i.map] <- c(model.pred$summary.fitted.values$mean[idx])
+  
+  prob.mean.raster<-raster(list(x = proj.grid.mat$x, 
+                                y = proj.grid.mat$y,
+                                z = prob.mean ))
+  
+  coords=cbind(test$x,test$y) #Coordenadas de los datos del test
+  bb<-extract(prob.mean.raster,coords) #Extraigo del raster los valores para las coordenadas
+  
+  #test$prob_mean<-as.data.frame(bb, xy=TRUE)
+  
+  prueba<-as.data.frame(cbind(coords,bb)) #Lo metemos en una matriz
+  colnames(prueba)<-c("lon", "lat", "mean_predic")
+  #prueba$predict<- as.integer(ifelse(prueba$mean_predic >= 0.7 , "1", "0"))
+  
+  m3=merge(test,prueba, by.x=c("x","y"),by.y=c("lon", "lat")) #, all=T //Uno valores de la prueba con el test
+  
+  ### -- Mi dataframe final -- ###
+  ID <-  as.numeric(dimnames(m3)[[1]])  # Identificador
+  verif<-as.data.frame(cbind(ID,m3$pb,m3$mean_predic))  #los uno en una tabla en forma: ID, Observados, predichos
+  
+  
+  ##### MIRAR AUC y TSS #####
+  
+  
+  Threshold<-optimal.thresholds(verif,threshold=101,
+                                which.model=1:(ncol(verif)-2), #which.model=1:(ncol(verif)-2)
+                                opt.methods=4, na.rm=T)
+  
+  confusionmatrix <-cmx(verif,threshold=Threshold[,2], which.model = 1, na.rm=T)
+  
+  #aucc<- auc(confusionmatrix, which.model = 1, na.rm=T) da error y no lo hace
+  
+  aucc<- auc(verif, which.model = 1, na.rm=T)
+  #auc_mean<- aucc$AUC
+  #☻auc_sd<- aucc$AUC.sd
+  
+  kappa<-Kappa(confusionmatrix)
+  #kappa_mean<- kappa$Kappa
+  #kappa_sd<- kappa$Kappa.sd
+  
+  
+  sensi<- sensitivity(confusionmatrix)
+  #sensi_mean<- sensi$sensitivity
+  #sensi_sd<- sensi$sensitivity.sd
+  
+  speci<-specificity(confusionmatrix)
+  #speci_mean<- speci$specificity
+  #speci_sd<- speci$specificity.sd
+  
+  corre <- cor.test(prueba$lon,prueba$mean_predic)  
+  #### Me devuelve los valores calculados en un dataframe
+  
+}
+
+# calcular el TSS 
+
+#Meto en matriz
+cosinas_ire <- matrix(ncol=9,nrow=10)
+cosinas_ire1 <- matrix(ncol=9,nrow=10)
+
+#Hago el bucle
+# for(i in 1:10){cosinas_ire[i,]<- simulacro(sdmdata, cat, formula0, predictors3)} 
+for(i in 1:10){cosinas_ire1[i,]<- simulacro(sdmdata, cat, formula1,#Lo junto todo
+# cosinas_ire <- cbind(aucc$AUC, aucc$AUC.sd, kappa$Kappa, kappa$Kappa.sd, sensi$sensitivity, sensi$sensitivity.sd, speci$specificity, speci$specificity.sd,corre$estimate)
+# cosinas_ire1 <- cbind(aucc$AUC, aucc$AUC.sd, kappa$Kappa, kappa$Kappa.sd, sensi$sensitivity, sensi$sensitivity.sd, speci$specificity, speci$specificity.sd,corre$estimate)
+
+#Le cambio el nombre por si acaso
+# cosinas0<-cosinas_ire 
+cosinas1<-cosinas_ire1
+
+#Calculo el TSS
+# TSS0 <-cosinas0[,5] + cosinas0[,7] -1 #Hago nueva columna para calcular el TSS
+# TSS0 <- matrix(TSS0, ncol=1,nrow=10)
+# CV0 <- matrix(c(TSS0,cosinas0),nrow = 10,ncol = 10)
+# colnames(CV0) <- c("TSS",'AUC_mean','AUC_sd','Kappa_mean','Kappa_sd', 'Sensi_mean','Sensi_sd','Speci_mean','Speci_sd',"Correlation")
+# 
+
+TSS1<- cosinas1[,5] + cosinas1[,7] -1 #Hago nueva columna para calcular el TSS
+TSS1 <- matrix(TSS1, ncol=1,nrow=10)
+CV1 <- matrix(c(TSS1,cosinas1),nrow = 10,ncol = 10)
+colnames(CV1) <- c("TSS",'AUC_mean','AUC_sd','Kappa_mean','Kappa_sd', 'Sensi_mean','Sensi_sd','Speci_mean','Speci_sd',"Correlation")
+
+# write.csv(CV0,"C:/Users/Irene/Source/Repositorios/TFM-Irene-Extremera/GLM INLA/cv_inla_sin_es_TODO.csv")
+write.csv(CV1,"C:/Users/Irene/Source/Repositorios/TFM-Irene-Extremera/GLM INLA/cv_inla_es_TODO.csv")
+CV1<-read.csv("C:/Users/Irene/Source/Repositorios/TFM-Irene-Extremera/GLM INLA/cv_inla_es_TODO.csv")
+# cosinas0<-apply(CV0, 2, mean)
+cosinas1<-apply(CV1, 2, mean)
+cosinas1<- cosinas1[c(2:11)]
+
+# write.csv(CV0,"C:/Users/Irene/Source/Repositorios/TFM-Irene-Extremera/GLM INLA/cv_inla_sin_es.csv")
+write.csv(cosinas1,"C:/Users/Irene/Source/Repositorios/TFM-Irene-Extremera/GLM INLA/cv_inla_es.csv")
+
+```
+

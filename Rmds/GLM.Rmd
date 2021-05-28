@@ -1,0 +1,599 @@
+---
+title: "GLM"
+author: "Irene Extremera Serrano"
+date: "9/3/2021"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(eval = TRUE, warning = FALSE, error = FALSE, message = FALSE, comment = " ")
+```
+
+###########################
+####### Librerías #########
+###########################
+
+```{r, warning=FALSE, message=FALSE, echo= FALSE}
+
+library(sp) #Tabajar con objetos de tipo espacial
+library(rgdal) #Es necesaria para la librería sdmpredictors
+library(carData)
+library(car)
+library(nlme)
+library(gstat)
+library(sf)
+library(spData)
+library(spdep)
+library(spatial)
+library(lattice)
+library(survival)
+library(Formula)
+library(ggplot2) #Para gráficos de las predicciones
+library(Hmisc)
+library(raster) #Para poder trabajar con objetos tipo raster
+library(leaflet)
+library(GGally)
+library(maptools)
+library(corrplot)
+library(rgeos)
+library(maptools) #Cargar mapas
+library(dismo) #Para poder trabajar con BIOCLIM y MAXENT
+library(sdmpredictors) #Para descargarme las variables ambientales
+library(PresenceAbsence)
+library(rJava)
+library(randomForest)
+library(INLA) #Para trabajar con INLA
+library(Matrix)
+library(parallel)
+library(foreach)
+library(dotCall64)
+library(grid)
+library(spam)
+library(fields)
+library(randomForest) #Para realizar Random Fores
+library(gbm) #Para realizar vosted regression tree
+library(TeachingDemos)
+library(raster)
+library(stars)
+library(mgcv)
+library(scatterplot3d)
+library(geoR)
+
+```
+
+#####################################################################
+####### Bases de datos, predictores, modelos y coeficientes #########
+#####################################################################
+
+```{r, echo= FALSE}
+
+# Directorio de trabajo
+
+setwd("C:/Users/Irene/Source/Repositorios/TFM-Irene-Extremera/Rmd")
+
+# Mapa del mundo
+data(wrld_simpl) 
+
+#Presencias
+data <- read.csv('C:/Users/Irene/Source/Repositorios/TFM-Irene-Extremera/Datos/Anchoas_Aqua_atln.csv',TRUE,",")
+data <- data[,-1] #Le quito al primera que es una columna de índices
+colnames(data) <- c('Lon','Lat') #Le doy nombre a las columnas
+
+#Predictores modelo
+cuatro_pred <- (list.files("C:/Users/Irene/Source/Repositorios/TFM-Irene-Extremera/Predictores/atl/Seleccionadas", full.names=T, pattern=".tif")) #Cargo bathy que lo he metido en una carpeta aparte
+predictors <- stack(cuatro_pred)
+names(predictors) <- c("bathy","odismean","salinity","tempmean")
+predictors3 <- scale(predictors)
+
+# Ausencias (Con todos los predictores pues es así como se han creado para meterlas al sdmdata_modelos)
+files<-(list.files("C:/Users/Irene/Source/Repositorios/TFM-Irene-Extremera/Predictores/atl", full.names=T, pattern=".tif"))#change directory
+predictores <- stack(files)
+names(predictores) <- c("bathy","chlomean","ppmean","odismean","salinity","tempmean")
+predictors2 <- scale(predictores) #Los escalo
+set.seed(141592) 
+backgr <- randomPoints(predictors2, 1000) 
+
+# Base de datos sin RAC.
+sdmdata <- read.csv("C:/Users/Irene/Source/Repositorios/TFM-Irene-Extremera/Datos/sdmdata_atln_modelos.csv")
+sdmdata <- sdmdata[,-1]
+
+# Base de datos sin escalar
+sdmdata_nos <- read.csv("C:/Users/Irene/Source/Repositorios/TFM-Irene-Extremera/Datos/sdmdata_sin_escalar.csv") #Sin las variables escaladas
+sdmdata_nos<- sdmdata_nos[,c(-1)]
+
+# Para comprobar que todo está en orden
+plot(wrld_simpl,xlim=c(-11,9),ylim=c(43,60))
+points(sdmdata[,6],sdmdata[,7])
+# points(cord.UTM[,1],cord.UTM[,2])
+
+## SIN COMPONENTE ESPACIAL 
+#Modelo
+glm1 <- readRDS("C:/Users/Irene/Source/Repositorios/TFM-Irene-Extremera/GLM frecuentista/GLM_model.rds")
+
+#Predictiva
+predm1 <- readRDS("C:/Users/Irene/Source/Repositorios/TFM-Irene-Extremera/GLM frecuentista/Predicciones_glm_Atl.ascii")
+
+#Coeficientes
+cosites_glm <- read.csv("C:/Users/Irene/Source/Repositorios/TFM-Irene-Extremera/GLM frecuentista/coeficientes_glmfrec_todas.csv")
+cosites_glm <-cosites_glm[,-1]
+coef_glm <- read.csv("C:/Users/Irene/Source/Repositorios/TFM-Irene-Extremera/GLM frecuentista/coeficientes_glmfrec.csv")
+
+# Predictores con RAC
+files<-(list.files("C:/Users/Irene/Source/Repositorios/TFM-Irene-Extremera/Predictores/RAC/GLM", full.names=T, pattern=".tif"))
+predictors <- stack(files)
+names(predictors) <- c("bathy","odismean","salinity","focal_rac_vect","tempmean")
+predictors_rac <- scale(predictors) 
+
+#### CON COMPONENTE ESPACIAL ####
+ddd<- read.csv('C:/Users/Irene/Source/Repositorios/TFM-Irene-Extremera/Datos/rac_glm.csv') #Base de datos con RAC
+ddd<-ddd[,-1]
+ddd$focal_rac_vect<-extract(predictors_rac$focal_rac_vect, ddd$x,ddd$y) #Mete los valores de rac escalados
+ddd<-na.omit(ddd)#Elimina los NAs
+
+
+# Predictores individuales
+bathy <- raster("C:/Users/Irene/Source/Repositorios/TFM-Irene-Extremera/Predictores/RAC/GLM/bathy_atln.TIF") #Cargo este raster para poder ajustar el raster r
+bathy
+
+# Modelo RAC
+glm_rac <-readRDS("C:/Users/Irene/Source/Repositorios/TFM-Irene-Extremera/GLM frecuentista/GLM_model_rac.rds")
+
+#Predictiva RAC
+predm_glm_rac <- readRDS("C:/Users/Irene/Source/Repositorios/TFM-Irene-Extremera/GLM frecuentista/Predicciones_glm_rac_Atl.ascii")
+
+#Coeficientes RAC
+cosites_glm_rac <- read.csv("C:/Users/Irene/Source/Repositorios/TFM-Irene-Extremera/GLM frecuentista/coeficientes_glmrac_todas.csv")
+cosites_glm_rac<-cosites_glm_rac[,-1]
+coef_glm_model_rac <- read.csv('C:/Users/Irene/Source/Repositorios/TFM-Irene-Extremera/GLM frecuentista/coeficientes_glmrac.csv')
+
+```
+
+
+##### ---  --- #####
+
+##############################################
+##### --- MODELO LINEAL GENERALIZADO --- #####
+##############################################
+
+Debido a que la variable respuesta se distribuye como una binomial voy a realizar un GLM introduciendo las covariables de forma aditiva.
+
+# Modelos
+
+```{r}
+
+# GLM
+glm1 <- glm(pb ~ bathy + odismean + tempmean + salinity, data=sdmdata, family="binomial") 
+
+# glm1 <- glm(pb ~ bathy + odismean + tempmean + salinity, data=sdmdata_nos, family="binomial") #Sin escalar
+
+saveRDS(glm1, "C:/Users/Irene/Source/Repositorios/TFM-Irene-Extremera/GLM frecuentista/GLM_model.rds")
+
+# Resumen del modelo
+summary(glm1) #Todas las variables salen significativas
+
+```
+
+Compruebo a continuación si hay colinealidad entre ellas.
+
+## Colinealidad
+```{r}
+
+# Colinealidad
+
+vif(glm1) #No la hay
+
+```
+
+## Valoración del modelo
+```{r}
+
+# Normalidad y homocedasticidad
+
+par(mfrow=c(2,2))
+plot(glm1) #No se ve normalidad ni homocedasticidad en los residuos
+
+```
+
+Los residuos no son normales, obviamente porque la variable respuesta es una binomial.
+
+```{r}
+
+res_m1 <- residuals(glm1,type='deviance')
+shapiro.test(res_m1) #No hay normalidad p valor de 2.2e-16
+1-pchisq(glm1$deviance, df = glm1$df.residual, lower.tail = F) #0.9586 hay diferencias significativas entre el modelo nulo y el ajustado
+
+```
+
+El shapiro test indica lo que ya se veia en los residuos, que no hay normalidad en ellos.
+Con el pchisq de 0.246 se observa que no hay diferencias significativas entre el modelo nulo y el ajustado.
+
+```{r}
+#Porcentaje de deviance explicado
+(summary(glm1)$deviance / summary(glm1)$null.deviance)*100
+
+```
+# Predicción
+
+```{r}
+
+# PREDICCIÓN
+predm1 <- predict(predictors3,glm1,type='response')
+
+saveRDS(predm1, "C:/Users/Irene/Source/Repositorios/TFM-Irene-Extremera/GLM frecuentista/Predicciones_glm_Atl.ascii")
+
+ggplot() +
+  geom_raster(data = raster::as.data.frame(predm1 , xy = TRUE) , aes(x = x, y = y, fill = layer)) +
+  coord_equal() +
+  labs( x = "", y = "")+theme_minimal()+
+  scale_color_brewer(palette = 'YlGnBu')+ labs(fill='')
+
+```
+
+## Correlación entre ajustados y observados
+
+```{r}
+
+coords <- as.data.frame(cbind(sdmdata$x,sdmdata$y)) #Extraigo la lat y long de los puntos obs
+ppm1<-extract(predm1,coords) #Lo mismo con los valores de probabilidad de los puntos observados
+ppm1<-as.data.frame(ppm1) #Paso a data.frame
+sdmdata1<-cbind(sdmdata,ppm1) #Lo junto todo a una base de datos
+sdmdata1<-na.omit(sdmdata1) #Elimino los NAs
+cor(sdmdata1$ppm1,sdmdata1$pb,method="spearman") # 0.260 es la correlación entre lo predicho y lo observado
+
+# plot(glm1$fitted.values, as.vector(unlist(ppm1)), main='Ajustados VS Observados', xlab='Valores Ajustados', ylab='Valores Observados',col=c('blue','green'))
+# abline(0,1)
+
+plot(glm1$fitted.values, sdmdata$pb, main='Ajustados VS Observados', xlab='Valores Ajustados', ylab='Valores Observados',col=c('blue','green'))
+abline(0,1)
+
+```
+
+La correlación entre lo predicho y observado es del 0.26. Aparte en la gráfica se observa que los valores predichos frente a observados no se ajustan a la recta.
+
+# CV
+
+```{r}
+
+# FUNCIÓN DEFINITIVA DEFINITIVÍSIMA MILENARIA XTREM: Funciona para glm.
+# Esta función sirve para hacer una cross validation y obtener así los distintos criterios de valoración del modelo que me interesan
+
+fddmx2 <- function(coordenadas, base_datos,background,model){
+
+      group <- kfold(coordenadas, 5) #kfold(1:1592, 5)
+
+      pres_train <- base_datos[group != 1, ] #Las que no sean 1
+      pres_test <- base_datos[group == 1, ] #Las que sean 1
+      
+      modelo <- update(model, data = pres_train)
+
+      group <- kfold(background, 5) #Hago 5 grupos de esos puntos
+      backg_train <- background[group != 1, ]
+      backg_test <- background[group == 1, ]
+      
+      eval.modesta <- evaluate(pres_test[pres_test==1,],pres_test[pres_test==0,],modelo)
+
+      auc_modelo.model <- eval.modesta@auc #auc
+      
+      cor_modelo.model <- eval.modesta@cor #cor
+      
+      kappa_modelo.model <- mean(eval.modesta@kappa) #Kappa
+
+      sensibility_modelo.model <- mean(eval.modesta@TPR/(eval.modesta@TPR+eval.modesta@FNR)) #Sensibilidad
+      
+      specificity_modelo.modelo <- mean(eval.modesta@TNR/(eval.modesta@FPR+eval.modesta@TNR)) #Especificidad
+      
+      TSS_modelo.model <- mean(eval.modesta@TPR+eval.modesta@TNR-1) #TSS
+      
+      return(c(auc_modelo.model,cor_modelo.model,kappa_modelo.model,sensibility_modelo.model,specificity_modelo.modelo,TSS_modelo.model))
+}
+
+# Hago una matriz para guardar los valores de los coeficientes de las diez iteraciones que me devuelva la función 
+cosites_glm <- matrix(ncol=6,nrow=10) 
+
+# Genereo un bucle for de 10 iteraciones que me devuelva 10 valores diferentes de los 6 coeficientes.
+for (i in 1:10) {cosites_glm[i,] <- fddmx2(sdmdata[,c(6,7)],sdmdata,backgr,glm1)}
+
+# Le doy nombre a las columnas para saber qué coeficientes hay dentro
+colnames(cosites_glm) <- c('AUC','COR','Kappa','Sensitivity','Specificity','TSS')
+write.csv(cosites_glm,'C:/Users/Irene/Source/Repositorios/TFM-Irene-Extremera/GLM Frecuentista/coeficientes_glmfrec_todas.csv')
+
+
+# Hago la media por columnas que es lo que me interesa y lo guardo
+coef_glm_model <- apply(cosites_glm, 2, mean);coef_glm_model 
+write.csv(coef_glm_model,'C:/Users/Irene/Source/Repositorios/TFM-Irene-Extremera/GLM Frecuentista/coeficientes_glmfrec.csv')
+coef_glm <- read.csv('C:/Users/Irene/Source/Repositorios/TFM-Irene-Extremera/GLM frecuentista/coeficientes_glmfrec.csv')
+
+```
+
+# Autoccorelación Espacial
+
+```{r}
+
+nb <- dnearneigh(as.matrix(sdmdata[,c(6,7)]), 1,max(sdmdata[,c(6,7)]));nb 
+listw <- nb2listw(nb,style = "S")
+
+MoranI_glm <- moran.test(residuals(glm1), listw=listw, randomisation=FALSE); MoranI_glm #p valor de 1 indica que Ho no se rechaza, no hay autocorrelación espacial
+Moran_MC_glm <- moran.mc(residuals(glm1), listw=listw, nsim=100); Moran_MC_glm #p valor de 0.99 Ho no se rechaza, lo cual indica que no hay autocorrelación espacial
+
+```
+
+No hay correlación espacial. Lo cual puede ser debido a que el area de estudio es muy grande.
+
+######################################################################
+##### --- MODELO LINEAL GENERALIZADO con componente espacial --- #####
+######################################################################
+
+# RAC
+```{r}
+
+########    RAC   ###################
+#Extract residuals from the glm model and map them
+r<- raster(xmn=-11, xmx=9, ymn=43, ymx=60, nrows=324, ncols=660);r #Hago un raster grande
+res(r) <‐ 0.083 #Le doy una resolución de 0.083
+xy <-cbind(sdmdata$x, sdmdata$y)#Cojo las coordenadas
+xy_residuals <-cbind(xy, resid(glm1)) #Uno las coordenadas y los residuos a un mismo objeto
+par(mfrow=c(1,2))
+r[cellFromXY(r, xy_residuals)] <-xy_residuals[,3] #Doy esos valoes de residuos a esas coordenadas
+plot(r,col='red') #Efectivamente me salen residuos
+ext <- c(-11,9,43,60) #Extensión a cortar
+salinity <- raster("C:/Users/Irene/Source/Repositorios/TFM-Irene-Extremera/Predictores/RAC/GLM/salinity_atln.TIF") #Cargo este raster para poder ajustar el raster r
+salinity
+
+r <- resample(r,salinity) #Ajusto las dimensiones de r a las de salinity
+r<-crop(r,ext);r #Lo corto
+# writeRaster(r, filename="RAC_glm_atln.tif", format="GTiff", overwrite=TRUE) #Lo guado en el wd
+rr <- aggregate(r,10)
+plot(rr)
+
+#Calculate residuals autocovariate
+focal_rac_rast <-focal(r, w=matrix(1,3,3), fun = mean,  na.rm = TRUE)
+
+#Extract the values of the focal operation from focal_rac_rest raserfile using the coordinates stored in xy
+focal_rac_vect <-extract(focal_rac_rast, xy)
+length(focal_rac_vect)
+
+
+#Add as a column to the data
+dd<-cbind(sdmdata, focal_rac_vect)
+I <- is.na(dd$focal_rac_vect)
+ddd<- dd[!I,]
+dim(dd)
+dim(ddd)
+
+write.csv(ddd,'C:/Users/Irene/Source/Repositorios/TFM-Irene-Extremera/Datos/rac_glm.csv')
+
+```
+
+
+
+##############################
+### --- Kriging con RAC--- ###
+##############################
+
+```{r}
+
+salinity<- load_layers(c("BO_salinity"))# datadir = tempdir())
+e<- extent(-11,9,43,60)
+sal=crop(salinity,e) #Corto el raster
+
+# Lo pinto
+plot(sal)
+points(ddd$x,ddd$y)
+
+# 2
+#Saco las coordenadas de uno de los rasters. Tengo que agregar porque sino no funciona el kriging.
+loci1 <-as.data.frame(coordinates(sal))
+summary(loci1)
+
+x.range <- as.numeric(c(-10.958, 8.958))  # min/max longitude of the interpolation area
+y.range <- as.numeric(c(42.04,59.96))  #in/max latitude of the interpolation area
+grd <- expand.grid(x = seq(from = x.range[1], to = x.range[2], by =  0.08333333), y = seq(from = y.range[1], 
+                                                                                          to = y.range[2], by =  0.08333333))  # expand points to grid
+coordinates(grd) <- ~x + y #Coordenadas del grid
+proj4string(grd) <- CRS("+init=epsg:4326") #Coordenadas geográficas
+gridded(grd)     <- TRUE  # Create SpatialPixel object
+fullgrid(grd)    <- TRUE  # Create SpatialGrid object
+
+coords <- cbind(ddd$x,ddd$y) #Asigno coordenadas
+matrix<-cbind(ddd$focal_rac_vect,ddd[,c(6,7)]) #Uno las coordenadas a los valores de rac
+matrix<-as.data.frame(matrix) #Lo paso a data.frame
+colnames(matrix)<-c("Pred","Lon","Lat") #Renombro
+
+coordinates(matrix) <- c("Lon", "Lat")  #Doy nombre a las coordenadas
+proj4string(matrix) <- CRS("+init=epsg:4326") #Coordenadas geográficas
+
+#Interpolate the grid cells using a power value of 2 (idp=2.0)
+rac <- gstat::idw(Pred~ 1, locations = matrix, newdata=grd, idp=0.1) 
+
+# Plot
+plot(rac,col=tim.colors(100)[1:100],main=" ", axes=T)
+data(wrld_simpl)
+plot(wrld_simpl, add=TRUE,col='dark grey')
+
+#convert to raster
+RAC=as.data.frame(rac) #Paso la interpolación a data.frame
+coordinates(RAC) <- ~ x + y #Le asigno unas coordenadas
+gridded(RAC) <- TRUE #Creo un objeto pixelado espacial
+RAC <- raster(RAC) #Lo transformo en raster
+
+plot(RAC)
+
+#####################################################
+#  CUT WITH BATHY
+##################################################
+
+depth<- load_layers(c("MS_bathy_5m")) #Cargo batimetría
+depth=crop(depth,e) #La corto
+depth=abs(depth) ##funcao abs converte em positivo ### formato raster
+
+## tem que transformar em data.frame
+
+matrix<- cbind(coordinates(depth), depth=getValues(depth)) #Cojo los valores de batimetría para esas coordenadas
+I <- is.na(matrix[,3]) #Identifico NAs
+matrix<- matrix[!I,] #Quito los NAs
+matrix<-as.data.frame(matrix) #Transformo a data.frame
+new<- subset(matrix, matrix$depth > 0) ###trocar profundidade
+
+###transformar data.frame em raster de novo
+
+xy <- cbind(new$x, new$y) #Me quedo con las coordenadas
+rast<- raster(xmn=-20, xmx=35, ymn=43, ymx=70, nrows=276, ncols=624)#2  
+p<- rasterize(xy, rast, new$depth, fun=max,na.rm=F) #Hago un raster
+p<-resample(p,sal) #Le doy las dimensiones de salinidad
+e<-extent(p) #
+
+sp<-crop(RAC,e)
+sp=resample(sp,p)
+sp<-raster::mask(sp,p)
+
+
+# Plot
+plot(sp,col=tim.colors(100)[1:100],main=" ", axes=T)
+data(wrld_simpl)
+plot(wrld_simpl, add=TRUE,col='dark grey')
+
+plot(RAC,col=tim.colors(100)[1:100],main=" ", axes=T)
+data(wrld_simpl)
+plot(wrld_simpl, add=TRUE,col='dark grey')
+
+
+writeRaster(sp, filename="sp_glm_atln.tif", format="GTiff", overwrite=TRUE)
+
+```
+
+# Modelo
+
+```{r}
+
+glm_rac <-  glm(pb ~ bathy + odismean + tempmean + salinity + focal_rac_vect, data=ddd, family="binomial") 
+
+saveRDS(glm_rac, "C:/Users/Irene/Source/Repositorios/TFM-Irene-Extremera/GLM frecuentista/GLM_model_rac.rds")
+
+# Resumen del modelo
+summary(glm_rac) #Todas las variables salen significativas
+
+```
+
+## Colinealidad 
+
+```{r}
+
+# Colinealidad
+
+vif(glm_rac) #No la hay
+
+```
+
+## Valoración del modelo
+```{r}
+
+# VALORACIÓN DEL MODELO:
+# Normalidad y homocedasticidad
+
+par(mfrow=c(2,2))
+plot(glm_rac) #No se ve normalidad ni homocedasticidad en los residuos
+
+```
+
+Los residuos no son normales, obviamente porque la variable respuesta es una binomial.
+
+```{r}
+
+res_glm_rac <- residuals(glm_rac,type='deviance')
+shapiro.test(res_glm_rac) #No hay normalidad p valor de 2.2e-16
+1-pchisq(glm_rac$deviance, df = glm_rac$df.residual, lower.tail = F) #0 hay diferencias significativas entre el modelo nulo y el ajustado
+
+```
+
+El shapiro test indica lo que ya se veia en los residuos, que no hay normalidad en ellos.
+Con el pchisq de 0 se observa que hay diferencias significativas entre el modelo nulo y el ajustado.
+
+```{r}
+
+# Otra forma de hacerlo (Da error)
+# coords2 <- cbind(ddd$x,ddd$y)
+# ppm2<-extract(predm_glm_rac,coords2) #Lo mismo con los valores de probabilidad de los puntos observados
+# ppm2<-as.data.frame(ppm2)
+# sdmdata2<-cbind(sdmdata,ppm2) #Lo junto todo a una base de datos
+# sdmdata2<-na.omit(sdmdata2) #Elimino los NAs
+# cor(sdmdata1$ppm1,sdmdata1$pb,method="spearman") # 0.260 es la correlación entre lo predicho y lo observado
+
+plot(glm_rac$fitted.values, ddd$pb, main='Ajustados VS Observados', xlab='Valores Ajustados', ylab='Valores Observados',col=c('blue','green'))
+abline(0,1) #Me da error porque las longitudes son diferentes
+
+```
+
+```{r}
+#Porcentaje de deviance explicado
+100-(summary(glm_rac)$deviance / summary(glm_rac)$null.deviance)*100
+
+```
+# Predicciones
+
+```{r}
+
+# PREDICCIÓN
+predm_glm_rac<-predict(predictors_rac, glm_rac,type='response')
+
+saveRDS(predm_glm_rac, "C:/Users/Irene/Source/Repositorios/TFM-Irene-Extremera/GLM frecuentista/Predicciones_glm_rac_Atl.ascii")
+
+ggplot() +
+  geom_raster(data = raster::as.data.frame(predm_glm_rac , xy = TRUE) , aes(x = x, y = y, fill = layer)) +
+  coord_equal() +
+  labs( x = "", y = "")+theme_minimal()+
+  scale_color_brewer(palette = 'YlGnBu')+ labs(fill='')
+
+par(mfrow=c(1,2))
+plot(predm1, col=tim.colors(100)[1:100],main="Glm", axes=T,zlim=c(0,1))
+data(wrld_simpl)
+plot(wrld_simpl, add=TRUE,col='dark grey')
+
+plot(predm_glm_rac, col=tim.colors(100)[1:100],main="Glm RAC", axes=T,zlim=c(0,1))
+data(wrld_simpl)
+plot(wrld_simpl, add=TRUE,col='dark grey')
+
+```
+
+# CV
+
+```{r}
+
+# Hago una matriz para guardar los valores de los coeficientes de las diez iteraciones que me devuelva la función 
+cosites_glm_rac <- matrix(ncol=6,nrow=10) 
+
+# Genereo un bucle for de 10 iteraciones que me devuelva 10 valores diferentes de los 6 coeficientes.
+for (i in 1:10) {cosites_glm_rac[i,] <- fddmx2(ddd[,c(6,7)],ddd,backgr,glm_rac)}
+
+# Le doy nombre a las columnas para saber qué coeficientes hay dentro
+colnames(cosites_glm_rac) <- c('AUC','COR','Kappa','Sensitivity','Specificity','TSS')
+write.csv(cosites_glm_rac,'C:/Users/Irene/Source/Repositorios/TFM-Irene-Extremera/GLM Frecuentista/coeficientes_glmrac_todas.csv')
+
+# Hago la media por columnas que es lo que me interesa y lo guardo
+coef_glm_model_rac <- apply(cosites_glm_rac, 2, mean);coef_glm_model_rac 
+write.csv(coef_glm_model_rac,'C:/Users/Irene/Source/Repositorios/TFM-Irene-Extremera/GLM Frecuentista/coeficientes_glmrac.csv')
+coef_glm_rac <- read.csv('C:/Users/Irene/Source/Repositorios/TFM-Irene-Extremera/GLM frecuentista/coeficientes_glmrac.csv')
+
+```
+
+# Autocorrelación espacial
+
+```{r}
+
+nb_rac <- dnearneigh(as.matrix(ddd[,c(6,7)]), 1,max(ddd[,c(6,7)]));nb_rac 
+listw_rac <- nb2listw(nb_rac,style = "S")
+
+MoranI_glm_rac <- moran.test(residuals(glm_rac), listw=listw_rac, randomisation=FALSE); MoranI_glm_rac #p valor de 0.02 indica que Ho se rechaza,hay autocorrelación espacial
+Moran_MC_glm_rac <- moran.mc(residuals(glm_rac), listw=listw_rac, nsim=100); Moran_MC_glm_rac #p valor de 0.001 Ho  se rechaza, lo cual indica que hay autocorrelación espacial
+
+cosis <- c(Moran_MC_glm$p.value,MoranI_glm$p.value, Moran_MC_glm_rac$p.value, MoranI_glm_rac$p.value)
+ind_m_bio <- matrix(cosis,ncol=2, nrow=2 )
+colnames(ind_m_bio) <- c("Moran MC", "Moran I")
+rownames(ind_m_bio) <- c("Sin EE","Con EE")
+write.csv(ind_m_bio,'C:/Users/Irene/Source/Repositorios/TFM-Irene-Extremera/GLM frecuentista/coeficientes_glm_moran.csv')
+
+```
+
+
+
+
+

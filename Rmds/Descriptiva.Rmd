@@ -1,0 +1,403 @@
+---
+title: "Descriptiva"
+author: "Irene Extremera Serrano"
+date: "9/3/2021"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(eval = TRUE, warning = FALSE, error = FALSE, message = FALSE, comment = " ")
+```
+
+###########################
+####### Librerías #########
+###########################
+
+````{r, warning=FALSE, message=FALSE, echo= FALSE}
+
+library(sp) #Tabajar con objetos de tipo espacial
+library(rgdal) #Es necesaria para la librería sdmpredictors
+library(carData)
+library(car)
+library(nlme)
+library(gstat)
+library(sf)
+library(spData)
+library(spdep)
+library(lattice)
+library(survival)
+library(Formula)
+library(ggplot2) #Para gráficos de las predicciones
+library(Hmisc)
+library(raster) #Para poder trabajar con objetos tipo raster
+library(leaflet)
+library(GGally)
+library(maptools)
+library(corrplot)
+library(rgeos)
+library(maptools) #Cargar mapas
+library(dismo) #Para poder trabajar con BIOCLIM y MAXENT
+library(sdmpredictors) #Para descargarme las variables ambientales
+library(PresenceAbsence)
+library(rJava)
+library(randomForest)
+library(INLA) #Para trabajar con INLA
+library(Matrix)
+library(parallel)
+library(foreach)
+library(dotCall64)
+library(grid)
+library(spam)
+library(fields)
+library(randomForest) #Para realizar Random Fores
+library(gbm) #Para realizar vosted regression tree
+library(TeachingDemos)
+library(raster)
+library(stars)
+library(mgcv)
+```
+
+#################################################
+########    CARGAR LAS BASES DE DATOS    ########
+#################################################
+
+```{r, echo= FALSE}
+
+# Directorio de trabajo
+
+setwd("C:/Users/Irene/Source/Repositorios/TFM-Irene-Extremera/Rmd")
+
+# Mapa del mundo
+
+data(wrld_simpl) 
+
+#Presencias
+data <- read.csv('C:/Users/Irene/Source/Repositorios/TFM-Irene-Extremera/Datos/Anchoas_Aqua_atln.csv',TRUE,",") #Elimino datos del mar Báltico
+data <- data[,-1] #Le quito al primera que es una columna de índices
+colnames(data) <- c('Lon','Lat') #Le doy nombre a las columnas
+
+#Realizo un plot para cerciorarme que todo está en orden 
+
+plot(wrld_simpl, xlim= c(-11,9),ylim=c(43,60), axes=TRUE,col="light yellow", main='Presencias Anchoa')
+points(data$Lon, data$Lat, col="blue", pch=20, cex=0.75)
+points(data$Lon, data$Lat, col="pink", cex=0.75)
+
+```
+
+```{r, echo= FALSE}
+
+# Predictores
+
+files<-(list.files("C:/Users/Irene/Source/Repositorios/TFM-Irene-Extremera/Predictores/atl", full.names=T, pattern=".tif"))#change directory
+predictors <- stack(files)
+names(predictors) <- c("bathy","chlomean","ppmean","odismean","salinity","tempmean")
+predictors2 <- scale(predictors) #Los escalo
+plot(predictors2)
+
+```
+
+El sistema de referencia es el de coordenadas cartográficas y la resolución es de 0.0833º.
+
+#############################################################
+##### --- Presencias, Pseudoausencias & Otras cosas --- #####
+#############################################################
+
+###########################
+####### Presencias ########
+###########################
+
+```{r,echo= FALSE}
+
+coords_pres <- cbind(data$Lon, data$Lat)
+colnames(coords_pres)<-c("x","y")
+
+presvals <- extract(predictors2, coords_pres)
+
+```
+
+
+################################
+####### Pseudoausencias ########
+################################
+
+```{r,echo= FALSE}
+
+set.seed(141592) 
+backgr <- randomPoints(predictors2, 1000) 
+
+backgr <-as.data.frame(backgr)
+
+absvals <- extract(predictors2, backgr)
+```
+
+```{r, echo= FALSE}
+
+# JUNTAR TODO EN UNA BASE DE DATOS
+# Genero un único vector de coordenadas de presencias y pseudoausencias
+coords<-as.data.frame(rbind(coords_pres,backgr))
+
+# Genero un vector con tantas presencias (1) y ausencias (0) haya
+pb <- c(rep(1, nrow(presvals)), rep(0, nrow(absvals)))
+
+# Junto los datos de las variables ambientales de presencia y pseudoausencia con los 0 y 1.
+sdmdata <- data.frame(cbind(pb, rbind(presvals, absvals), coords))
+head(sdmdata)
+
+#Hay que mirar si hay NAs: si son pocos se quitan.
+to.remove <- which(!complete.cases(sdmdata))
+sdmdata <- sdmdata[-to.remove,]
+
+# Elimino los datos de pseudoausencia que no están en la de interés y lo guardo en sdmdata
+
+```
+
+```{r,echo= FALSE}
+
+# Base de datos con los valores de las variables ambientales para cada presencia
+sdmdata <- read.csv("C:/Users/Irene/Source/Repositorios/TFM-Irene-Extremera/Datos/sdmdata_atln.csv") #Todas las variables escaladas
+sdmdata<- sdmdata[,c(-1)]
+
+sdmdata_nos <- read.csv("C:/Users/Irene/Source/Repositorios/TFM-Irene-Extremera/Datos/sdmdata_sin_escalar.csv") #Sin las variables escaladas
+sdmdata_nos<- sdmdata_nos[,c(-1)]
+
+#Pintado
+plot(wrld_simpl, xlim= c(-11,9),ylim=c(43,60), axes=TRUE,col="light yellow")
+points(sdmdata$x, sdmdata$y, col="pink", pch=20, cex=0.75)
+
+```
+
+
+#############################################################
+################## ----- Descriptiva ----- ##################
+#############################################################
+
+```{r}
+
+# Miro la correlación entre variables para identificar qué variables o no incluir.
+# La correlación se empieza a plantear el no introducir la variable partir de 0.7.
+# Hacer modelos con correlación y sin ella para ver cómo ajustan y ver cómo se explica (opcional)
+
+matrix<-rcorr(as.matrix(sdmdata[,c(2:7)]), type = "pearson")
+
+# ... : further arguments to pass to the native R cor.test function
+cor.mtest <- function(mat, ...) {
+  mat <- as.matrix(mat)
+  n <- ncol(mat)
+  p.mat<- matrix(NA, n, n)
+  diag(p.mat) <- 0
+  for (i in 1:(n - 1)) {
+    for (j in (i + 1):n) {
+      tmp <- cor.test(mat[, i], mat[, j], ...)
+      p.mat[i, j] <- p.mat[j, i] <- tmp$p.value
+    }
+  }
+  colnames(p.mat) <- rownames(p.mat) <- colnames(mat)
+  p.mat
+}
+
+corrplot(matrix$r, type="lower", tl.col = "black",method="number",
+         p.mat = matrix$P, sig.level = 0.05)
+
+```
+
+Se puede observar que las correlaciones entre algunas de las variables son bastante altas entre: ppmean y tempmean, odismean y chlmean y bathy y ppmean.
+
+A continuación realizo un ggpairs para ver qué tipo de relación hay entre las covariables escaladas y sin escalar.
+
+```{r, echo=FALSE}
+
+# Escaladas
+
+par(mfrow=c(2,1))
+attach(sdmdata)
+G1<-ggplot(sdmdata, aes(bathy,chlomean) ) +
+  geom_point()
+G1
+
+G2<-ggplot(sdmdata, aes(bathy,ppmean) ) +
+  geom_point()
+G2
+
+G3<-ggplot(sdmdata, aes(bathy,salinity) ) +
+  geom_point()
+G3
+
+G4<-ggplot(sdmdata, aes(bathy,odismean) ) +
+  geom_point()
+G4
+
+
+G5<-ggplot(sdmdata, aes(bathy,tempmean) ) +
+  geom_point()
+G5
+
+
+G6<-ggplot(sdmdata, aes(ppmean,chlomean) ) +
+  geom_point()
+G6
+
+G7<-ggplot(sdmdata, aes(ppmean,odismean) ) +
+  geom_point()
+G7
+
+G8<-ggplot(sdmdata, aes(ppmean,tempmean) ) +
+  geom_point()
+G8
+
+G9<-ggplot(sdmdata, aes(ppmean,salinity) ) +
+  geom_point()
+G9
+
+G10<-ggplot(sdmdata, aes(salinity,chlomean) ) +
+  geom_point()
+G10
+
+G11<-ggplot(sdmdata, aes(salinity,tempmean) ) +
+  geom_point()
+G11
+
+G12<-ggplot(sdmdata, aes(salinity,odismean) ) +
+  geom_point()
+G12
+
+G13<-ggplot(sdmdata, aes(odismean,tempmean) ) +
+  geom_point()
+G13
+
+G14<-ggplot(sdmdata, aes(odismean,chlomean) ) +
+  geom_point()
+G14
+
+G15<-ggplot(sdmdata, aes(tempmean,chlomean) ) +
+  geom_point()
+G15
+
+```
+
+Se observa que la forma que tienen de relacionarse las variables entre ellas es bastante extraña en algunos casos. Por ello se valora a continuación realizar estos mismos gráficos con las variables ambientales sin escalar.
+
+```{r}
+
+# SIN ESCALAR
+# Para ello hay que preparar una base de datos como la de sdmdata pero con los predictores no escalados
+
+# PRESENCIAS
+
+coords_pres <- cbind(data$Lon, data$Lat)
+colnames(coords_pres)<-c("x","y")
+presvals_nos <- extract(predictors, coords_pres)
+
+# AUSENCIAS
+
+absvals_nos <- extract(predictors, backgr)
+
+# COORDENADAS
+
+coords_nos<-as.data.frame(rbind(coords_pres,backgr))
+
+# 1 & 0
+
+pb <- c(rep(1, nrow(presvals_nos)), rep(0, nrow(absvals_nos)))
+
+# BASE DE DATOS
+
+sdmdata_nos <- data.frame(cbind(pb, rbind(presvals_nos, absvals_nos), coords_nos))
+
+# NAs
+
+to.remove <- which(!complete.cases(sdmdata_nos))
+sdmdata_nos <- sdmdata_nos[-to.remove,]
+
+```
+
+```{r, echo=FALSE}
+
+# Escaladas
+
+par(mfrow=c(2,1))
+attach(sdmdata_nos)
+G1<-ggplot(sdmdata_nos, aes(bathy,chlomean) ) +
+  geom_point()
+G1
+
+G2<-ggplot(sdmdata_nos, aes(bathy,ppmean) ) +
+  geom_point()
+G2
+
+G3<-ggplot(sdmdata_nos, aes(bathy,salinity) ) +
+  geom_point()
+G3
+
+G4<-ggplot(sdmdata_nos, aes(bathy,odismean) ) +
+  geom_point()
+G4
+
+
+G5<-ggplot(sdmdata_nos, aes(bathy,tempmean) ) +
+  geom_point()
+G5
+
+
+G6<-ggplot(sdmdata_nos, aes(ppmean,chlomean) ) +
+  geom_point()
+G6
+
+G7<-ggplot(sdmdata_nos, aes(ppmean,odismean) ) +
+  geom_point()
+G7
+
+G8<-ggplot(sdmdata_nos, aes(ppmean,tempmean) ) +
+  geom_point()
+G8
+
+G9<-ggplot(sdmdata_nos, aes(ppmean,salinity) ) +
+  geom_point()
+G9
+
+G10<-ggplot(sdmdata_nos, aes(salinity,chlomean) ) +
+  geom_point()
+G10
+
+G11<-ggplot(sdmdata_nos, aes(salinity,tempmean) ) +
+  geom_point()
+G11
+
+G12<-ggplot(sdmdata_nos, aes(salinity,odismean) ) +
+  geom_point()
+G12
+
+G13<-ggplot(sdmdata_nos, aes(odismean,tempmean) ) +
+  geom_point()
+G13
+
+G14<-ggplot(sdmdata_nos, aes(odismean,chlomean) ) +
+  geom_point()
+G14
+
+G15<-ggplot(sdmdata_nos, aes(tempmean,chlomean) ) +
+  geom_point()
+G15
+
+```
+
+Al comparar las gráficas en las que se relacionan las variables escaladas y no se comprueba que efectivamente entre ellas tienen una relación un poco extraña. 
+
+Estas relaciones entre las covariables sirve de aliciente para pensar que uno de los modelos a realizar sea un modelo aditivo generalizado (GAM).
+Además, cabe mencionar que la variable respuesta se distribuye como una binomial por lo que otro de los modelos a plantear será un modelo lineal generalizado (GLM).
+
+En la linea de selección de variables, a continuación se mirará la multicolinealidad entre ellas mediante el VIF (factor de inflación de la varianza). Para ello se partirá de todas las variables y posteriormente se irán eliminando una a una las que tengan un mayor valor hasta que el grupo quede con valores de VIF menores a 3.
+
+```{r}
+
+# Compruebo si hay o no multicolinealidad entre variables
+# El objetivo es quedarse con un conjunto de variables con un VIF menor a 5 y 3.
+
+source("HighstatLib.r") #Función ya hecha
+# corvif(sdmdata[,c(2:7)]) #Solo la hago para las que no son covaraibles
+# View(sdmdata)
+corvif(sdmdata[,c(2,5,6,7)]) #He ido quitando una a una las que tenían un GVIF mas alto, ppmean y chlmean
+```
+
+Las variables con las que me quedaré finalmente han sido: batimetría, oxígeno disuelto, temperatura media y salinidad. 
+
+
