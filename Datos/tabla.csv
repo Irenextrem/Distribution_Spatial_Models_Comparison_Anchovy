@@ -1,0 +1,14 @@
+"","% varianza explicada","% deviance explicada"
+"BIO",0,0
+"BIO RAC",0,0
+"MXT",0,0
+"MXT RAC",0,0
+"RF",7.28,0
+"RF RAC",25.23,0
+"BRT",0,11.43
+"BRT RAC",0,3.25
+"GLM",0,91.88
+"GLM RAC",0,96.95
+"GAM",0,11.9
+"GAM BIV",0,43.9
+"GAM RAC",0,3.08

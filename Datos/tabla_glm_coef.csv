@@ -1,0 +1,3 @@
+"","X","Intercept","Bathy","Odismean","Tempmean","Salinity","Espacial"
+"1","GLM",1.34e-09,2e-16,0.4827,0.0139,0.6294,"X"
+"2","GLM RAC",3.6e-06,3.8e-05,0.688,0.796,0.499,"2e-16"

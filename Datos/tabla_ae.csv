@@ -1,0 +1,14 @@
+"","índice de Moran 1"," índice de Moran 2"
+"Bioclim",0.99,0.99
+"Bioclin esp",1,1
+"Maxent",0.99,0.99
+"Maxent esp",1,1
+"Random Forest",0.01,0.01
+"Random Forest esp",0,0
+"Brt",0.98,0.03
+"Brt esp",0.995,0.065
+"GLM",0.99,0.01
+"GLM esp",1,0.017
+"Gam",0.703,0.712
+"GAM esp",0.03,0.02
+"Gam spline",0.455,0.388
