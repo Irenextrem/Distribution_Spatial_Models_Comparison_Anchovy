@@ -127,8 +127,8 @@ predictors_rac <- scale(predictors)
 #### CON COMPONENTE ESPACIAL ####
 ddd<- read.csv('C:/Users/Irene/Source/Repositorios/TFM-Irene-Extremera/Datos/rac_glm.csv') #Base de datos con RAC
 ddd<-ddd[,-1]
-ddd$focal_rac_vect<-extract(predictors_rac$focal_rac_vect, ddd$x,ddd$y) #Mete los valores de rac escalados
-ddd<-na.omit(ddd)#Elimina los NAs
+#ddd$focal_rac_vect<-extract(predictors_rac$focal_rac_vect, ddd$x,ddd$y) #Mete los valores de rac escalados
+#ddd<-na.omit(ddd)#Elimina los NAs
 
 
 # Predictores individuales
