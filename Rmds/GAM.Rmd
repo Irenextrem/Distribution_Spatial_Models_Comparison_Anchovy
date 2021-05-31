@@ -137,8 +137,8 @@ predictors_rac <- scale(predictors)
 gam_rac <-readRDS( "C:/Users/Irene/Source/Repositorios/TFM-Irene-Extremera/GAM/gam_rac.rds")
 ddd <- read.csv('C:/Users/Irene/Source/Repositorios/TFM-Irene-Extremera/Datos/rac_gam.csv')
 ddd<-ddd[,-1]
-ddd$focal_rac_vect<-extract(predictors_rac$focal_rac_vect, ddd$x,ddd$y) #Mete los valores de rac escalados
-ddd<-na.omit(ddd)#Elimina los NAs
+#ddd$focal_rac_vect<-extract(predictors_rac$focal_rac_vect, ddd$x,ddd$y) #Mete los valores de rac escalados
+#ddd<-na.omit(ddd)#Elimina los NAs
 
 # CV rac
 cosites_gam_rac <- read.csv('C:/Users/Irene/Source/Repositorios/TFM-Irene-Extremera/GAM/coeficientes_gam_rac_todos.csv')
